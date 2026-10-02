@@ -5,18 +5,30 @@ pub enum ErrorCode {
     #[msg("Exceeds maximum allowed markup")]
     ExceedsMaxAllowedMarkup,
 
-    #[msg("Invalid Supply amount")]
+    #[msg("Invalid supply amount")]
     InvalidSupplyAmount,
 
-    #[msg("Event Sold Out")]
+    #[msg("Event sold out")]
     EventSoldOut,
 
     #[msg("Exceeds maximum resale")]
     ExceedsMaximumResale,
 
-    #[msg("Event Ended")]
+    #[msg("Event ended")]
     EventEnded,
 
-    #[msg("Invalid Scanner")]
+    #[msg("Invalid scanner")]
     InvalidScanner,
+
+    #[msg("Exceeds maximum allowed royalty")]
+    ExceedsMaxAllowedRoyalty,
+
+    #[msg("Invalid event initialization")]
+    InvalidEvent,
+
+    #[msg("No ticket price set")]
+    InvalidPrice,
+
+    #[msg("Protocol fees not included")]
+    InvalidFee,
 }

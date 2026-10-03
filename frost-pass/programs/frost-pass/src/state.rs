@@ -6,6 +6,7 @@ pub struct EventConfig {
     pub event_id: u32,
     pub organizer: Pubkey,
     pub usdc_mint: Pubkey,
+    pub collection: Pubkey,
 
     pub ticket_price: u64,
     pub ticket_supply: u32,

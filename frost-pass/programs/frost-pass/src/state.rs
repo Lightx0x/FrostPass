@@ -3,7 +3,7 @@ use anchor_lang::prelude::*;
 #[account]
 #[derive(InitSpace)]
 pub struct EventConfig {
-    pub event_id: u64,
+    pub event_id: u32,
     pub organizer: Pubkey,
     pub treasury: Pubkey,
     pub protocol_vault: Pubkey,
@@ -30,15 +30,6 @@ pub struct EventConfig {
 pub struct TicketState {
     pub event: Pubkey,
     pub resale_count: u8,
-    pub bump: u8,
-}
-
-#[account]
-#[derive(InitSpace)]
-pub struct ResaleListing {
-    pub event: Pubkey,
-    pub seller: Pubkey,
-    pub listed_price: u64,
-    pub list_timestamp: i64,
+    pub seller: Option<Pubkey>,
     pub bump: u8,
 }

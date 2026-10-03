@@ -4,31 +4,40 @@ use anchor_lang::prelude::*;
 pub enum ErrorCode {
     #[msg("Exceeds maximum allowed markup")]
     ExceedsMaxAllowedMarkup,
-
     #[msg("Invalid supply amount")]
     InvalidSupplyAmount,
-
     #[msg("Event sold out")]
     EventSoldOut,
-
     #[msg("Exceeds maximum resale")]
-    ExceedsMaximumResale,
-
+    ResaleLimitReached,
     #[msg("Event ended")]
     EventEnded,
-
+    #[msg("Event end must be in the future")]
+    EventEndInPast,
     #[msg("Invalid scanner")]
     InvalidScanner,
-
+    #[msg("Too many scanners")]
+    TooManyScanners,
     #[msg("Exceeds maximum allowed royalty")]
     ExceedsMaxAllowedRoyalty,
-
     #[msg("Invalid event initialization")]
     InvalidEvent,
-
-    #[msg("No ticket price set")]
+    #[msg("Invalid ticket price")]
     InvalidPrice,
-
-    #[msg("Protocol fees not included")]
-    InvalidFee,
+    #[msg("Resale price above markup cap")]
+    PriceAboveCap,
+    #[msg("Ticket not listed")]
+    NotListed,
+    #[msg("Ticket already listed")]
+    AlreadyListed,
+    #[msg("Signer does not hold this ticket")]
+    NotTicketOwner,
+    #[msg("Signer is not the listed seller")]
+    NotSeller,
+    #[msg("Token account has the wrong mint")]
+    InvalidMint,
+    #[msg("Token account has the wrong owner")]
+    InvalidOwner,
+    #[msg("Math overflow")]
+    MathOverflow,
 }

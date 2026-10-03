@@ -13,7 +13,6 @@ pub struct EventConfig {
     pub ticket_supply: u32,
     pub tickets_minted: u32,
 
-    pub max_resales: u8,
     pub markup_cap_bps: u16,
     pub royalty_bps: u16,
     pub protocol_bps: u16,

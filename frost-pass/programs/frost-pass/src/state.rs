@@ -1,4 +1,5 @@
 use anchor_lang::prelude::*;
+use crate::constants::MAX_SCANNERS;
 
 #[account]
 #[derive(InitSpace)]
@@ -17,7 +18,7 @@ pub struct EventConfig {
 
     pub event_end: i64,
 
-    #[max_len(5)]
+    #[max_len(MAX_SCANNERS)]
     pub scanners: Vec<Pubkey>,
     pub bump: u8,
 }

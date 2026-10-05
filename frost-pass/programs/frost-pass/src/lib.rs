@@ -26,7 +26,6 @@ pub mod frost_pass {
         royalty_bps: u16,
         event_end: i64,
         scanners: Vec<Pubkey>,
-        usdc_mint: Pubkey,
     ) -> Result<()> {
         instructions::handle_init_event(
             ctx,
@@ -39,7 +38,6 @@ pub mod frost_pass {
             royalty_bps,
             event_end,
             scanners,
-            usdc_mint,
         )
     }
 }

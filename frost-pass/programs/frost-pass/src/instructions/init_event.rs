@@ -1,14 +1,19 @@
 use anchor_lang::prelude::*;
+use anchor_spl::token_interface::Mint;
 use mpl_core::{
     instructions::CreateCollectionV1CpiBuilder,
     types::{
-        PermanentBurnDelegate, PermanentTransferDelegate, Plugin, PluginAuthorityPair,
+        PermanentBurnDelegate, PermanentFreezeDelegate, PermanentTransferDelegate, Plugin,
+        PluginAuthority, PluginAuthorityPair,
     },
     ID as MPL_CORE_ID,
 };
 
 use crate::{
-    constants::{EVENT_SEED, MAX_MARKUP_BPS, MAX_ROYALTY_BPS, MAX_SCANNERS},
+    constants::{
+        EVENT_SEED, MAX_EVENT_DURATION, MAX_MARKUP_BPS, MAX_NAME_LENGTH, MAX_ROYALTY_BPS,
+        MAX_SCANNERS, MAX_URI_LENGTH, MIN_EVENT_DURATION, USDC_MINT,
+    },
     error::ErrorCode,
     state::EventConfig,
 };
@@ -23,13 +28,16 @@ pub struct InitEvent<'info> {
         init,
         payer = organizer,
         space = 8 + EventConfig::INIT_SPACE,
-        seeds = [EVENT_SEED, event_id.to_le_bytes().as_ref()],
+        seeds = [EVENT_SEED, organizer.key().as_ref(), event_id.to_le_bytes().as_ref()],
         bump
     )]
     pub event_config: Account<'info, EventConfig>,
 
     #[account(mut)]
     pub collection: Signer<'info>,
+
+    #[account(address = USDC_MINT)]
+    pub usdc_mint: InterfaceAccount<'info, Mint>,
 
     /// CHECK: Metaplex Core Program
     #[account(address = MPL_CORE_ID)]
@@ -49,27 +57,53 @@ pub fn handle_init_event(
     royalty_bps: u16,
     event_end: i64,
     scanners: Vec<Pubkey>,
-    usdc_mint: Pubkey,
 ) -> Result<()> {
     let clock = Clock::get()?;
 
-    require!(event_end > clock.unix_timestamp, ErrorCode::EventEndInPast);
+    // Time & Economic Validations
+    require!(
+        event_end >= clock.unix_timestamp + MIN_EVENT_DURATION,
+        ErrorCode::EventDurationTooShort
+    );
+    require!(
+        event_end <= clock.unix_timestamp + MAX_EVENT_DURATION,
+        ErrorCode::EventDurationTooLong
+    );
     require!(ticket_supply > 0, ErrorCode::InvalidSupplyAmount);
     require!(ticket_price > 0, ErrorCode::InvalidPrice);
     require!(markup_cap_bps <= MAX_MARKUP_BPS, ErrorCode::ExceedsMaxAllowedMarkup);
     require!(royalty_bps <= MAX_ROYALTY_BPS, ErrorCode::ExceedsMaxAllowedRoyalty);
+
+    // Metadata Validations
+    require!(!name.is_empty() && name.len() <= MAX_NAME_LENGTH, ErrorCode::InvalidNameLength);
+    require!(!uri.is_empty() && uri.len() <= MAX_URI_LENGTH, ErrorCode::InvalidUriLength);
+
+    // Scanner Validations
+    require!(!scanners.is_empty(), ErrorCode::NoScannersProvided);
     require!(scanners.len() <= MAX_SCANNERS, ErrorCode::TooManyScanners);
+
+    // Reject duplicate scanners
+    for i in 0..scanners.len() {
+        for j in (i + 1)..scanners.len() {
+            require!(scanners[i] != scanners[j], ErrorCode::DuplicateScanner);
+        }
+    }
 
     let event_config_info = ctx.accounts.event_config.to_account_info();
 
+    // Configure Permanent Plugins: Transfer, Burn, and Freeze (Anti-P2P bypass)
     let plugins = vec![
         PluginAuthorityPair {
             plugin: Plugin::PermanentTransferDelegate(PermanentTransferDelegate {}),
-            authority: None,
+            authority: Some(PluginAuthority::UpdateAuthority),
         },
         PluginAuthorityPair {
             plugin: Plugin::PermanentBurnDelegate(PermanentBurnDelegate {}),
-            authority: None,
+            authority: Some(PluginAuthority::UpdateAuthority),
+        },
+        PluginAuthorityPair {
+            plugin: Plugin::PermanentFreezeDelegate(PermanentFreezeDelegate { frozen: true }),
+            authority: Some(PluginAuthority::UpdateAuthority),
         },
     ];
 
@@ -85,7 +119,7 @@ pub fn handle_init_event(
     let event_config = &mut ctx.accounts.event_config;
     event_config.event_id = event_id;
     event_config.organizer = ctx.accounts.organizer.key();
-    event_config.usdc_mint = usdc_mint;
+    event_config.usdc_mint = ctx.accounts.usdc_mint.key();
     event_config.collection = ctx.accounts.collection.key();
     event_config.ticket_price = ticket_price;
     event_config.ticket_supply = ticket_supply;

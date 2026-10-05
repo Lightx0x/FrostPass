@@ -18,8 +18,17 @@ pub const PROTOCOL_FEE_BPS: u16 = 200; // 2% in basis points
 #[constant]
 pub const MAX_MARKUP_BPS: u16 = 2_000; // 20% in basis points
 
-#[constant]
 pub const MAX_SCANNERS: usize = 5; // Max authorized scanners per event
+
+pub const MAX_NAME_LENGTH: usize = 32; // Max string length for event name
+pub const MAX_URI_LENGTH: usize = 200; // Max string length for metadata URI
+
+pub const MIN_EVENT_DURATION: i64 = 3_600; // Minimum 1 hour (in seconds)
+pub const MAX_EVENT_DURATION: i64 = 365 * 24 * 3_600; // Maximum 1 year (in seconds)
+
+// Devnet USDC mint (used for development and testing)
+#[constant]
+pub const USDC_MINT: Pubkey = pubkey!("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU");
 
 // TODO: replace with the real protocol treasury wallet before deploy
 #[constant]

@@ -14,16 +14,30 @@ pub enum ErrorCode {
     EventEnded,
     #[msg("Event end must be in the future")]
     EventEndInPast,
+    #[msg("Event duration too short (minimum 1 hour)")]
+    EventDurationTooShort,
+    #[msg("Event duration too long (maximum 1 year)")]
+    EventDurationTooLong,
     #[msg("Invalid scanner")]
     InvalidScanner,
     #[msg("Too many scanners")]
     TooManyScanners,
+    #[msg("No scanners provided")]
+    NoScannersProvided,
+    #[msg("Duplicate scanner provided")]
+    DuplicateScanner,
     #[msg("Exceeds maximum allowed royalty")]
     ExceedsMaxAllowedRoyalty,
     #[msg("Invalid event initialization")]
     InvalidEvent,
     #[msg("Invalid ticket price")]
     InvalidPrice,
+    #[msg("Invalid event name length")]
+    InvalidNameLength,
+    #[msg("Invalid metadata URI length")]
+    InvalidUriLength,
+    #[msg("Invalid USDC mint")]
+    InvalidUsdcMint,
     #[msg("Resale price above markup cap")]
     PriceAboveCap,
     #[msg("Ticket not listed")]

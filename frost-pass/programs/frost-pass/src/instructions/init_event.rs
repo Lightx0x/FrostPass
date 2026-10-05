@@ -30,7 +30,7 @@ pub struct InitEvent<'info> {
         seeds = [EVENT_SEED, organizer.key().as_ref(), event_id.to_le_bytes().as_ref()],
         bump
     )]
-    pub event_config: Account<'info, EventConfig>,
+    pub event_config: Box<Account<'info, EventConfig>>,
 
     #[account(mut)]
     pub collection: Signer<'info>,
@@ -89,6 +89,13 @@ pub fn handle_init_event(
     // Scanner Validations
     require!(!scanners.is_empty(), ErrorCode::NoScannersProvided);
     require!(scanners.len() <= MAX_SCANNERS, ErrorCode::TooManyScanners);
+    require!(!scanners.contains(&Pubkey::default()), ErrorCode::InvalidScanner);
+
+    // Collection != Organizer Validation
+    require!(
+        ctx.accounts.collection.key() != ctx.accounts.organizer.key(),
+        ErrorCode::InvalidEvent
+    );
 
     // Reject duplicate scanners
     for scanner in 0..scanners.len() {

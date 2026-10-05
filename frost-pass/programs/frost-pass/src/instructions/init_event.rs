@@ -83,9 +83,9 @@ pub fn handle_init_event(
     require!(scanners.len() <= MAX_SCANNERS, ErrorCode::TooManyScanners);
 
     // Reject duplicate scanners
-    for i in 0..scanners.len() {
-        for j in (i + 1)..scanners.len() {
-            require!(scanners[i] != scanners[j], ErrorCode::DuplicateScanner);
+    for scanner in 0..scanners.len() {
+        for next_scanner in (scanner + 1)..scanners.len() {
+            require!(scanners[scanner] != scanners[next_scanner], ErrorCode::DuplicateScanner);
         }
     }
 

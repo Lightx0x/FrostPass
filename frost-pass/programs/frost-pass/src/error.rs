@@ -12,8 +12,6 @@ pub enum ErrorCode {
     ResaleLimitReached,
     #[msg("Event ended")]
     EventEnded,
-    #[msg("Event end must be in the future")]
-    EventEndInPast,
     #[msg("Event duration too short (minimum 1 hour)")]
     EventDurationTooShort,
     #[msg("Event duration too long (maximum 1 year)")]
@@ -48,8 +46,6 @@ pub enum ErrorCode {
     NotTicketOwner,
     #[msg("Signer is not the listed seller")]
     NotSeller,
-    #[msg("Token account has the wrong mint")]
-    InvalidMint,
     #[msg("Token account has the wrong owner")]
     InvalidOwner,
     #[msg("Math overflow")]

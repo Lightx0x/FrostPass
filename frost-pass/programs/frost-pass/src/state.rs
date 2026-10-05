@@ -1,12 +1,11 @@
-use anchor_lang::prelude::*;
 use crate::constants::MAX_SCANNERS;
+use anchor_lang::prelude::*;
 
 #[account]
 #[derive(InitSpace)]
 pub struct EventConfig {
     pub event_id: u32,
     pub organizer: Pubkey,
-    pub usdc_mint: Pubkey,
     pub collection: Pubkey,
 
     pub ticket_price: u64,

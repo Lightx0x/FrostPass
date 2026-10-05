@@ -27,7 +27,7 @@ pub struct InitEvent<'info> {
     #[account(
         init,
         payer = organizer,
-        space = 8 + EventConfig::INIT_SPACE,
+        space = EventConfig::DISCRIMINATOR.len() + EventConfig::INIT_SPACE,
         seeds = [EVENT_SEED, organizer.key().as_ref(), event_id.to_le_bytes().as_ref()],
         bump
     )]

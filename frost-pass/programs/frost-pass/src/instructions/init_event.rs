@@ -36,7 +36,7 @@ pub struct InitEvent<'info> {
     #[account(mut)]
     pub collection: Signer<'info>,
 
-    #[account(address = USDC_MINT)]
+    #[account(address = USDC_MINT @ ErrorCode::InvalidUsdcMint)]
     pub usdc_mint: InterfaceAccount<'info, Mint>,
 
     /// CHECK: Metaplex Core Program

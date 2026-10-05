@@ -1,5 +1,4 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token_interface::Mint;
 use mpl_core::{
     instructions::CreateCollectionV1CpiBuilder,
     types::{
@@ -12,7 +11,7 @@ use mpl_core::{
 use crate::{
     constants::{
         EVENT_SEED, MAX_EVENT_DURATION, MAX_MARKUP_BPS, MAX_NAME_LENGTH, MAX_ROYALTY_BPS,
-        MAX_SCANNERS, MAX_URI_LENGTH, MIN_EVENT_DURATION, USDC_MINT,
+        MAX_SCANNERS, MAX_URI_LENGTH, MIN_EVENT_DURATION,
     },
     error::ErrorCode,
     state::EventConfig,
@@ -35,9 +34,6 @@ pub struct InitEvent<'info> {
 
     #[account(mut)]
     pub collection: Signer<'info>,
-
-    #[account(address = USDC_MINT @ ErrorCode::InvalidUsdcMint)]
-    pub usdc_mint: InterfaceAccount<'info, Mint>,
 
     /// CHECK: Metaplex Core Program
     #[account(address = MPL_CORE_ID)]
@@ -71,12 +67,24 @@ pub fn handle_init_event(
     );
     require!(ticket_supply > 0, ErrorCode::InvalidSupplyAmount);
     require!(ticket_price > 0, ErrorCode::InvalidPrice);
-    require!(markup_cap_bps <= MAX_MARKUP_BPS, ErrorCode::ExceedsMaxAllowedMarkup);
-    require!(royalty_bps <= MAX_ROYALTY_BPS, ErrorCode::ExceedsMaxAllowedRoyalty);
+    require!(
+        markup_cap_bps <= MAX_MARKUP_BPS,
+        ErrorCode::ExceedsMaxAllowedMarkup
+    );
+    require!(
+        royalty_bps <= MAX_ROYALTY_BPS,
+        ErrorCode::ExceedsMaxAllowedRoyalty
+    );
 
     // Metadata Validations
-    require!(!name.is_empty() && name.len() <= MAX_NAME_LENGTH, ErrorCode::InvalidNameLength);
-    require!(!uri.is_empty() && uri.len() <= MAX_URI_LENGTH, ErrorCode::InvalidUriLength);
+    require!(
+        !name.is_empty() && name.len() <= MAX_NAME_LENGTH,
+        ErrorCode::InvalidNameLength
+    );
+    require!(
+        !uri.is_empty() && uri.len() <= MAX_URI_LENGTH,
+        ErrorCode::InvalidUriLength
+    );
 
     // Scanner Validations
     require!(!scanners.is_empty(), ErrorCode::NoScannersProvided);
@@ -85,7 +93,10 @@ pub fn handle_init_event(
     // Reject duplicate scanners
     for scanner in 0..scanners.len() {
         for next_scanner in (scanner + 1)..scanners.len() {
-            require!(scanners[scanner] != scanners[next_scanner], ErrorCode::DuplicateScanner);
+            require!(
+                scanners[scanner] != scanners[next_scanner],
+                ErrorCode::DuplicateScanner
+            );
         }
     }
 
@@ -119,7 +130,6 @@ pub fn handle_init_event(
     let event_config = &mut ctx.accounts.event_config;
     event_config.event_id = event_id;
     event_config.organizer = ctx.accounts.organizer.key();
-    event_config.usdc_mint = ctx.accounts.usdc_mint.key();
     event_config.collection = ctx.accounts.collection.key();
     event_config.ticket_price = ticket_price;
     event_config.ticket_supply = ticket_supply;

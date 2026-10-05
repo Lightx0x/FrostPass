@@ -25,7 +25,7 @@ pub struct MintTicket<'info> {
 
     #[account(
         mut,
-        address = event_config.collection @ ErrorCode::InvalidEvent,
+        address = event_config.collection  @ ErrorCode::InvalidCollection,
         owner = MPL_CORE_ID,
     )]
     pub collection: UncheckedAccount<'info>,

@@ -86,15 +86,18 @@ pub fn handle_init_event(
         ErrorCode::InvalidUriLength
     );
 
-    // Scanner Validations
-    require!(!scanners.is_empty(), ErrorCode::NoScannersProvided);
-    require!(scanners.len() <= MAX_SCANNERS, ErrorCode::TooManyScanners);
-    require!(!scanners.contains(&Pubkey::default()), ErrorCode::InvalidScanner);
-
     // Collection != Organizer Validation
     require!(
         ctx.accounts.collection.key() != ctx.accounts.organizer.key(),
-        ErrorCode::InvalidEvent
+        ErrorCode::InvalidCollection
+    );
+
+    // Scanner Validations
+    require!(!scanners.is_empty(), ErrorCode::NoScannersProvided);
+    require!(scanners.len() <= MAX_SCANNERS, ErrorCode::TooManyScanners);
+    require!(
+        !scanners.contains(&Pubkey::default()),
+        ErrorCode::InvalidScanner
     );
 
     // Reject duplicate scanners

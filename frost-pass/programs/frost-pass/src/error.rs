@@ -26,8 +26,10 @@ pub enum ErrorCode {
     DuplicateScanner,
     #[msg("Exceeds maximum allowed royalty")]
     ExceedsMaxAllowedRoyalty,
-    #[msg("Invalid event initialization")]
+    #[msg("Ticket does not belong to this event")]
     InvalidEvent,
+    #[msg("Collection must be a new account not the organizer")]
+    InvalidCollection,
     #[msg("Invalid ticket price")]
     InvalidPrice,
     #[msg("Invalid event name length")]

@@ -11,7 +11,7 @@ use crate::{
 #[derive(Accounts)]
 pub struct MintTicket<'info> {
     #[account(mut)]
-    pub buyer: Signer<'info>,
+    pub minter: Signer<'info>,
 
     #[account(
         mut,
@@ -33,13 +33,13 @@ pub struct MintTicket<'info> {
     pub collection: UncheckedAccount<'info>,
 
     #[account(mut)]
-    pub ticket: Signer<'info>,
+    pub ticket_asset: Signer<'info>,
 
     #[account(
         init,
-        payer = buyer,
+        payer = minter,
         space = TicketState::DISCRIMINATOR.len() + TicketState::INIT_SPACE,
-        seeds = [TICKET_SEED, ticket.key().as_ref()],
+        seeds = [TICKET_SEED, ticket_asset.key().as_ref()],
         bump,
     )]
     pub ticket_state: Account<'info, TicketState>,
@@ -49,15 +49,17 @@ pub struct MintTicket<'info> {
 
     #[account(
         mut,
-        constraint = buyer_usdc.owner == buyer.key() @ ErrorCode::InvalidOwner,
-        constraint = buyer_usdc.mint == usdc_mint.key() @ ErrorCode::InvalidUsdcMint,
+        associated_token::mint = usdc_mint,
+        associated_token::authority = minter,
+        associated_token::token_program = token_program,
     )]
-    pub buyer_usdc: Account<'info, TokenAccount>,
+    pub minter_usdc: Account<'info, TokenAccount>,
 
     #[account(
         mut,
-        constraint = organizer_usdc.owner == event_config.organizer @ ErrorCode::InvalidOwner,
-        constraint = organizer_usdc.mint == usdc_mint.key() @ ErrorCode::InvalidUsdcMint,
+        associated_token::mint = usdc_mint,
+        associated_token::authority = event_config.organizer,
+        associated_token::token_program = token_program,
     )]
     pub organizer_usdc: Account<'info, TokenAccount>,
 
@@ -72,9 +74,9 @@ pub struct MintTicket<'info> {
 
 pub fn handle_mint_ticket(ctx: Context<MintTicket>) -> Result<()> {
     let event_config = &ctx.accounts.event_config;
-    let now = Clock::get()?.unix_timestamp;
+    let current_time = Clock::get()?.unix_timestamp;
 
-    require!(now < event_config.event_end, ErrorCode::EventEnded);
+    require!(current_time < event_config.event_end, ErrorCode::EventEnded);
     require!(
         event_config.tickets_minted < event_config.ticket_supply,
         ErrorCode::EventSoldOut
@@ -95,10 +97,10 @@ pub fn handle_mint_ticket(ctx: Context<MintTicket>) -> Result<()> {
         CpiContext::new(
             ctx.accounts.token_program.key(),
             TransferChecked {
-                from: ctx.accounts.buyer_usdc.to_account_info(),
+                from: ctx.accounts.minter_usdc.to_account_info(),
                 mint: ctx.accounts.usdc_mint.to_account_info(),
                 to: ctx.accounts.organizer_usdc.to_account_info(),
-                authority: ctx.accounts.buyer.to_account_info(),
+                authority: ctx.accounts.minter.to_account_info(),
             },
         ),
         event_config.ticket_price,
@@ -116,11 +118,11 @@ pub fn handle_mint_ticket(ctx: Context<MintTicket>) -> Result<()> {
     ];
 
     CreateV1CpiBuilder::new(&ctx.accounts.mpl_core_program.to_account_info())
-        .asset(&ctx.accounts.ticket.to_account_info())
+        .asset(&ctx.accounts.ticket_asset.to_account_info())
         .collection(Some(&ctx.accounts.collection.to_account_info()))
         .authority(Some(&ctx.accounts.event_config.to_account_info()))
-        .payer(&ctx.accounts.buyer.to_account_info())
-        .owner(Some(&ctx.accounts.buyer.to_account_info()))
+        .payer(&ctx.accounts.minter.to_account_info())
+        .owner(Some(&ctx.accounts.minter.to_account_info()))
         .name(name)
         .uri(uri)
         .system_program(&ctx.accounts.system_program.to_account_info())

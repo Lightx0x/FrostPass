@@ -40,4 +40,7 @@ pub mod frost_pass {
             scanners,
         )
     }
+    pub fn mint_ticket(ctx: Context<MintTicket>) -> Result<()> {
+        instructions::handle_mint_ticket(ctx)
+    }
 }

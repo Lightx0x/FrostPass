@@ -1,5 +1,8 @@
 use anchor_lang::prelude::*;
-use mpl_core::{accounts::BaseAssetV1, types::UpdateAuthority};
+use mpl_core::{
+    accounts::BaseAssetV1,
+    types::{Key, UpdateAuthority},
+};
 
 use crate::{error::ErrorCode, state::EventConfig};
 
@@ -11,6 +14,9 @@ pub fn load_ticket_asset(
 ) -> Result<BaseAssetV1> {
     let asset = BaseAssetV1::from_bytes(&ticket_asset.data.borrow())
         .map_err(|_| ErrorCode::InvalidEvent)?;
+
+    // from_bytes doesn't check the account type, so reject collections and other Core accounts
+    require!(asset.key == Key::AssetV1, ErrorCode::InvalidEvent);
 
     require!(
         asset.update_authority == UpdateAuthority::Collection(event_config.collection),

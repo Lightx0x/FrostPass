@@ -1,12 +1,13 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Mint, Token, TokenAccount, TransferChecked};
-use mpl_core::{instructions::CreateV1CpiBuilder, ID as MPL_CORE_ID};
+use mpl_core::{accounts::BaseCollectionV1, instructions::CreateV1CpiBuilder, ID as MPL_CORE_ID};
 
 use crate::{
-    constants::{EVENT_SEED, MAX_NAME_LENGTH, MAX_URI_LENGTH, TICKET_SEED, USDC_MINT},
+    constants::{EVENT_SEED, TICKET_SEED, USDC_MINT},
     error::ErrorCode,
     state::{EventConfig, TicketState},
 };
+
 #[derive(Accounts)]
 pub struct MintTicket<'info> {
     #[account(mut)]
@@ -21,11 +22,12 @@ pub struct MintTicket<'info> {
         ],
         bump = event_config.bump,
     )]
-    pub event_config: Account<'info, EventConfig>,
+    pub event_config: Box<Account<'info, EventConfig>>,
 
+    /// CHECK: Event collection; address and owner are constrained below.
     #[account(
         mut,
-        address = event_config.collection  @ ErrorCode::InvalidCollection,
+        address = event_config.collection @ ErrorCode::InvalidCollection,
         owner = MPL_CORE_ID,
     )]
     pub collection: UncheckedAccount<'info>,
@@ -61,13 +63,14 @@ pub struct MintTicket<'info> {
 
     pub token_program: Program<'info, Token>,
 
+    /// CHECK: Address is constrained to the Metaplex Core program ID.
     #[account(address = MPL_CORE_ID)]
     pub mpl_core_program: UncheckedAccount<'info>,
 
     pub system_program: Program<'info, System>,
 }
 
-pub fn handle_mint_ticket(ctx: Context<MintTicket>, name: String, uri: String) -> Result<()> {
+pub fn handle_mint_ticket(ctx: Context<MintTicket>) -> Result<()> {
     let event_config = &ctx.accounts.event_config;
     let now = Clock::get()?.unix_timestamp;
 
@@ -77,14 +80,16 @@ pub fn handle_mint_ticket(ctx: Context<MintTicket>, name: String, uri: String) -
         ErrorCode::EventSoldOut
     );
 
-    require!(
-        !name.is_empty() && name.len() <= MAX_NAME_LENGTH,
-        ErrorCode::InvalidNameLength
-    );
-    require!(
-        !uri.is_empty() && uri.len() <= MAX_URI_LENGTH,
-        ErrorCode::InvalidUriLength
-    );
+    let collection_data = BaseCollectionV1::from_bytes(&ctx.accounts.collection.data.borrow())
+        .map_err(|_| ErrorCode::InvalidCollection)?;
+
+    let ticket_number = event_config
+        .tickets_minted
+        .checked_add(1)
+        .ok_or(ErrorCode::MathOverflow)?;
+
+    let name = format!("{} #{}", collection_data.name, ticket_number);
+    let uri = collection_data.uri;
 
     token::transfer_checked(
         CpiContext::new(
@@ -128,12 +133,7 @@ pub fn handle_mint_ticket(ctx: Context<MintTicket>, name: String, uri: String) -
     ticket_state.list_price = 0;
     ticket_state.bump = ctx.bumps.ticket_state;
 
-    ctx.accounts.event_config.tickets_minted = ctx
-        .accounts
-        .event_config
-        .tickets_minted
-        .checked_add(1)
-        .ok_or(ErrorCode::MathOverflow)?;
+    ctx.accounts.event_config.tickets_minted = ticket_number;
 
     Ok(())
 }

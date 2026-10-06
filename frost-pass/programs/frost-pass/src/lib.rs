@@ -2,6 +2,7 @@ pub mod constants;
 pub mod error;
 pub mod instructions;
 pub mod state;
+pub mod utils;
 
 use anchor_lang::prelude::*;
 
@@ -40,7 +41,16 @@ pub mod frost_pass {
             scanners,
         )
     }
+
     pub fn mint_ticket(ctx: Context<MintTicket>) -> Result<()> {
         instructions::handle_mint_ticket(ctx)
+    }
+
+    pub fn list_ticket(ctx: Context<ListTicket>, list_price: u64) -> Result<()> {
+        instructions::handle_list_ticket(ctx, list_price)
+    }
+
+    pub fn delist_ticket(ctx: Context<DelistTicket>) -> Result<()> {
+        instructions::handle_delist_ticket(ctx)
     }
 }

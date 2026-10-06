@@ -48,8 +48,6 @@ pub enum ErrorCode {
     NotTicketOwner,
     #[msg("Signer is not the listed seller")]
     NotSeller,
-    #[msg("Token account has the wrong owner")]
-    InvalidOwner,
     #[msg("Math overflow")]
     MathOverflow,
 }

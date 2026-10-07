@@ -44,10 +44,16 @@ pub enum ErrorCode {
     NotListed,
     #[msg("Ticket already listed")]
     AlreadyListed,
-    #[msg("Signer does not hold this ticket")]
+    #[msg("Holder does not own this ticket")]
     NotTicketOwner,
     #[msg("Signer is not the listed seller")]
     NotSeller,
     #[msg("Math overflow")]
     MathOverflow,
+    #[msg("Challenge expired")]
+    ChallengeExpired,
+    #[msg("Invalid challenge")]
+    InvalidChallenge,
+    #[msg("Listed tickets cannot be redeemed")]
+    TicketListed,
 }

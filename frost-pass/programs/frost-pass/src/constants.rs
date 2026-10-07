@@ -35,3 +35,7 @@ pub const USDC_MINT: Pubkey = pubkey!("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDn
 pub const PROTOCOL_TREASURY: Pubkey = pubkey!("FrostPassTreasuryP1aceho1der111111111111111");
 
 pub const BPS_DENOMINATOR: u64 = 10_000; // 100% in basis points
+
+pub const CHALLENGE_DOMAIN: &[u8; 16] = b"BANANA_TICKET_V1";
+pub const CHALLENGE_NONCE_LENGTH: usize = 16;
+pub const CHALLENGE_VALIDITY_SECONDS: i64 = 60;

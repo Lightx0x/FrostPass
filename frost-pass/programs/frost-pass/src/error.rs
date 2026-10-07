@@ -56,4 +56,8 @@ pub enum ErrorCode {
     InvalidChallenge,
     #[msg("Listed tickets cannot be redeemed")]
     TicketListed,
+    #[msg("Buyer cannot be the seller")]
+    BuyerIsSeller,
+    #[msg("Listing price exceeds max buyer price")]
+    PriceExceedsMax,
 }

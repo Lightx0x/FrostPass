@@ -44,7 +44,7 @@ pub enum ErrorCode {
     NotListed,
     #[msg("Ticket already listed")]
     AlreadyListed,
-    #[msg("Holder does not own this ticket")]
+    #[msg("User does not own this ticket")]
     NotTicketOwner,
     #[msg("Signer is not the listed seller")]
     NotSeller,

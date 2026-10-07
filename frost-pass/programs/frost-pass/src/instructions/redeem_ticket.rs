@@ -25,7 +25,7 @@ pub struct RedeemTicket<'info> {
     pub scanner: Signer<'info>,
 
     #[account(mut)]
-    pub holder: SystemAccount<'info>,
+    pub user: SystemAccount<'info>,
 
     #[account(
         seeds = [
@@ -40,7 +40,7 @@ pub struct RedeemTicket<'info> {
     /// CHECK: Address and MPL Core ownership are constrained.
     #[account(
         mut,
-        address = event_config.collection,
+       address = event_config.collection @ ErrorCode::InvalidCollection,
         owner = MPL_CORE_ID,
     )]
     pub collection: UncheckedAccount<'info>,
@@ -51,7 +51,7 @@ pub struct RedeemTicket<'info> {
 
     #[account(
         mut,
-        close = holder,
+        close = user,
         seeds = [TICKET_SEED, ticket_asset.key().as_ref()],
         bump = ticket_state.bump,
         constraint = ticket_state.event == event_config.key()
@@ -72,6 +72,7 @@ pub struct RedeemTicket<'info> {
 
 pub fn handle_redeem_ticket(
     ctx: Context<RedeemTicket>,
+    // Freshness only — replay protection comes from burn + expiry
     nonce: [u8; CHALLENGE_NONCE_LENGTH],
     expiry: i64,
 ) -> Result<()> {
@@ -102,21 +103,21 @@ pub fn handle_redeem_ticket(
 
     require_keys_eq!(
         asset.owner,
-        ctx.accounts.holder.key(),
+        ctx.accounts.user.key(),
         ErrorCode::NotTicketOwner
     );
 
     let message = build_challenge_message(
         &ctx.accounts.event_config.key(),
         &ctx.accounts.ticket_asset.key(),
-        &ctx.accounts.holder.key(),
+        &ctx.accounts.user.key(),
         &nonce,
         expiry,
     );
 
     verify_ed25519_instruction(
         &ctx.accounts.instructions_sysvar.to_account_info(),
-        &ctx.accounts.holder.key(),
+        &ctx.accounts.user.key(),
         &message,
     )?;
 
@@ -144,7 +145,7 @@ pub fn handle_redeem_ticket(
 fn build_challenge_message(
     event: &Pubkey,
     asset: &Pubkey,
-    holder: &Pubkey,
+    user: &Pubkey,
     nonce: &[u8; CHALLENGE_NONCE_LENGTH],
     expiry: i64,
 ) -> [u8; CHALLENGE_MESSAGE_LENGTH] {
@@ -153,7 +154,7 @@ fn build_challenge_message(
     message[0..16].copy_from_slice(CHALLENGE_DOMAIN);
     message[16..48].copy_from_slice(event.as_ref());
     message[48..80].copy_from_slice(asset.as_ref());
-    message[80..112].copy_from_slice(holder.as_ref());
+    message[80..112].copy_from_slice(user.as_ref());
     message[112..128].copy_from_slice(nonce);
     message[128..136].copy_from_slice(&expiry.to_le_bytes());
 

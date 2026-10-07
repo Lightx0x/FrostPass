@@ -32,6 +32,7 @@ pub struct BuyTicket<'info> {
 
     /// CHECK: Event collection; address and owner are constrained below.
     #[account(
+        mut,
         address = event_config.collection @ ErrorCode::InvalidCollection,
         owner = MPL_CORE_ID,
     )]
@@ -128,6 +129,8 @@ pub fn handle_buy_ticket(ctx: Context<BuyTicket>, max_price: u64) -> Result<()> 
         ErrorCode::NotTicketOwner
     );
 
+    // max_price is the maximum listing price the buyer accepts (slippage protection).
+    // All royalties and protocol fees are deducted directly from this amount, not added on top.
     let price = ticket_state.list_price;
     require!(price > 0, ErrorCode::InvalidPrice);
     require!(price <= max_price, ErrorCode::PriceExceedsMax);

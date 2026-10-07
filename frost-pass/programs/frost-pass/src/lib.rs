@@ -54,6 +54,10 @@ pub mod frost_pass {
         instructions::handle_delist_ticket(ctx)
     }
 
+    pub fn buy_ticket(ctx: Context<BuyTicket>, max_price: u64) -> Result<()> {
+        instructions::handle_buy_ticket(ctx, max_price)
+    }
+
     pub fn redeem_ticket(
         ctx: Context<RedeemTicket>,
         nonce: [u8; CHALLENGE_NONCE_LENGTH],

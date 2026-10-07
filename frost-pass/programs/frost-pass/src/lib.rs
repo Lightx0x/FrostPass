@@ -53,4 +53,12 @@ pub mod frost_pass {
     pub fn delist_ticket(ctx: Context<DelistTicket>) -> Result<()> {
         instructions::handle_delist_ticket(ctx)
     }
+
+    pub fn redeem_ticket(
+        ctx: Context<RedeemTicket>,
+        nonce: [u8; CHALLENGE_NONCE_LENGTH],
+        expiry: i64,
+    ) -> Result<()> {
+        instructions::handle_redeem_ticket(ctx, nonce, expiry)
+    }
 }

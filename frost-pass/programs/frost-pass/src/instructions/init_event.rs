@@ -11,10 +11,11 @@ use mpl_core::{
 use crate::{
     constants::{
         EVENT_SEED, MAX_EVENT_DURATION, MAX_MARKUP_BPS, MAX_NAME_LENGTH, MAX_ROYALTY_BPS,
-        MAX_SCANNERS, MAX_URI_LENGTH, MIN_EVENT_DURATION,
+        MAX_URI_LENGTH, MIN_EVENT_DURATION,
     },
     error::ErrorCode,
     state::EventConfig,
+    utils::validate_scanners,
 };
 
 #[derive(Accounts)]
@@ -98,22 +99,7 @@ pub fn handle_init_event(
     );
 
     // Scanner Validations
-    require!(!scanners.is_empty(), ErrorCode::NoScannersProvided);
-    require!(scanners.len() <= MAX_SCANNERS, ErrorCode::TooManyScanners);
-    require!(
-        !scanners.contains(&Pubkey::default()),
-        ErrorCode::InvalidScanner
-    );
-
-    // Reject duplicate scanners
-    for scanner in 0..scanners.len() {
-        for next_scanner in (scanner + 1)..scanners.len() {
-            require!(
-                scanners[scanner] != scanners[next_scanner],
-                ErrorCode::DuplicateScanner
-            );
-        }
-    }
+    validate_scanners(&scanners)?;
 
     let event_config_info = ctx.accounts.event_config.to_account_info();
 

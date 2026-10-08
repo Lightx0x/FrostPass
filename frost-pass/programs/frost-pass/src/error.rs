@@ -64,4 +64,6 @@ pub enum ErrorCode {
     BuyerIsSeller,
     #[msg("Listing price exceeds max buyer price")]
     PriceExceedsMax,
+    #[msg("Signer is not the event organizer")]
+    NotOrganizer,
 }

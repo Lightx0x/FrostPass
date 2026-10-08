@@ -36,6 +36,11 @@ pub const PROTOCOL_TREASURY: Pubkey = pubkey!("FrostPassTreasuryP1aceho1der11111
 
 pub const BPS_DENOMINATOR: u64 = 10_000; // 100% in basis points
 
-pub const CHALLENGE_DOMAIN: &[u8; 16] = b"FROSTPASS_TKT_V1";
+#[constant]
+pub const CHALLENGE_DOMAIN: &[u8] = b"FROSTPASS_TKT_V1"; // 16 bytes, part of the signed redeem message
+const _: () = assert!(CHALLENGE_DOMAIN.len() == 16);
+
 pub const CHALLENGE_NONCE_LENGTH: usize = 16;
+
+#[constant]
 pub const CHALLENGE_VALIDITY_SECONDS: i64 = 90;

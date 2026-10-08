@@ -44,6 +44,10 @@ pub mod frost_pass {
         )
     }
 
+    pub fn update_scanners(ctx: Context<UpdateScanners>, scanners: Vec<Pubkey>) -> Result<()> {
+        instructions::handle_update_scanners(ctx, scanners)
+    }
+
     pub fn mint_ticket(ctx: Context<MintTicket>) -> Result<()> {
         instructions::handle_mint_ticket(ctx)
     }

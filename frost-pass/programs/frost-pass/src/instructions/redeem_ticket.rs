@@ -97,11 +97,6 @@ pub fn handle_redeem_ticket(
 
     require!(expiry <= maximum_expiry, ErrorCode::InvalidChallenge);
 
-    require!(
-        ctx.accounts.ticket_state.seller.is_none(),
-        ErrorCode::TicketListed
-    );
-
     let asset = load_ticket_asset(&ctx.accounts.ticket_asset, event_config)?;
 
     require_keys_eq!(

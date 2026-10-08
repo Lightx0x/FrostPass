@@ -10,10 +10,10 @@ pub const TICKET_SEED: &[u8] = b"ticket";
 pub const MAX_RESALE: u8 = 2; // Max amount of resales allowed
 
 #[constant]
-pub const MAX_ROYALTY_BPS: u16 = 300; // 3% in basis points, organizer's royalty_bps can't exceed this
+pub const MAX_ROYALTY_BPS: u16 = 500; // 5% in basis points, organizer's royalty_bps can't exceed this
 
 #[constant]
-pub const PROTOCOL_FEE_BPS: u16 = 200; // 2% in basis points
+pub const MINT_FEE: u64 = 250_000; // 0.25 USDC protocol fee per primary mint, paid by the minter on top of ticket_price
 
 #[constant]
 pub const MAX_MARKUP_BPS: u16 = 2_000; // 20% in basis points

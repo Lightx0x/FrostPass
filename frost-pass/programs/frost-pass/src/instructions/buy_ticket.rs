@@ -3,10 +3,7 @@ use anchor_spl::token::{self, Mint, Token, TokenAccount, TransferChecked};
 use mpl_core::{instructions::TransferV1CpiBuilder, ID as MPL_CORE_ID};
 
 use crate::{
-    constants::{
-        BPS_DENOMINATOR, EVENT_SEED, MAX_RESALE, PROTOCOL_FEE_BPS, PROTOCOL_TREASURY, TICKET_SEED,
-        USDC_MINT,
-    },
+    constants::{BPS_DENOMINATOR, EVENT_SEED, MAX_RESALE, TICKET_SEED, USDC_MINT},
     error::ErrorCode,
     state::{EventConfig, TicketState},
     utils::load_ticket_asset,
@@ -80,14 +77,6 @@ pub struct BuyTicket<'info> {
     )]
     pub organizer_usdc: Box<Account<'info, TokenAccount>>,
 
-    #[account(
-        mut,
-        associated_token::mint = usdc_mint,
-        associated_token::authority = PROTOCOL_TREASURY,
-        associated_token::token_program = token_program,
-    )]
-    pub protocol_usdc: Box<Account<'info, TokenAccount>>,
-
     pub token_program: Program<'info, Token>,
 
     /// CHECK: Address is constrained to the Metaplex Core program ID.
@@ -130,44 +119,38 @@ pub fn handle_buy_ticket(ctx: Context<BuyTicket>, max_price: u64) -> Result<()> 
     );
 
     // max_price is the maximum listing price the buyer accepts (slippage protection).
-    // All royalties and protocol fees are deducted directly from this amount, not added on top.
+    // The royalty is deducted directly from this amount, not added on top.
     let price = ticket_state.list_price;
-    require!(price > 0, ErrorCode::InvalidPrice);
     require!(price <= max_price, ErrorCode::PriceExceedsMax);
 
-    // Compute fee splits
-    let royalty = (price as u128)
-        .checked_mul(event_config.royalty_bps as u128)
-        .ok_or(ErrorCode::MathOverflow)?
-        .checked_div(BPS_DENOMINATOR as u128)
-        .ok_or(ErrorCode::MathOverflow)? as u64;
+    // Resales pay no protocol fee: the price splits into the royalty and the seller's share
+    let royalty = u64::try_from(
+        (price as u128)
+            .checked_mul(event_config.royalty_bps as u128)
+            .ok_or(ErrorCode::MathOverflow)?
+            .checked_div(BPS_DENOMINATOR as u128)
+            .ok_or(ErrorCode::MathOverflow)?,
+    )
+    .map_err(|_| ErrorCode::MathOverflow)?;
 
-    let protocol_fee = (price as u128)
-        .checked_mul(PROTOCOL_FEE_BPS as u128)
-        .ok_or(ErrorCode::MathOverflow)?
-        .checked_div(BPS_DENOMINATOR as u128)
-        .ok_or(ErrorCode::MathOverflow)? as u64;
+    let seller_amount = price.checked_sub(royalty).ok_or(ErrorCode::MathOverflow)?;
 
-    let seller_amount = price
-        .checked_sub(royalty)
-        .ok_or(ErrorCode::MathOverflow)?
-        .checked_sub(protocol_fee)
-        .ok_or(ErrorCode::MathOverflow)?;
-
-    // Transfer USDC to seller
-    token::transfer_checked(
-        CpiContext::new(
-            ctx.accounts.token_program.key(),
-            TransferChecked {
-                from: ctx.accounts.buyer_usdc.to_account_info(),
-                mint: ctx.accounts.usdc_mint.to_account_info(),
-                to: ctx.accounts.seller_usdc.to_account_info(),
-                authority: ctx.accounts.buyer.to_account_info(),
-            },
-        ),
-        seller_amount,
-        ctx.accounts.usdc_mint.decimals,
-    )?;
+    // Transfer USDC to seller if nonzero (free listings are allowed)
+    if seller_amount > 0 {
+        token::transfer_checked(
+            CpiContext::new(
+                ctx.accounts.token_program.key(),
+                TransferChecked {
+                    from: ctx.accounts.buyer_usdc.to_account_info(),
+                    mint: ctx.accounts.usdc_mint.to_account_info(),
+                    to: ctx.accounts.seller_usdc.to_account_info(),
+                    authority: ctx.accounts.buyer.to_account_info(),
+                },
+            ),
+            seller_amount,
+            ctx.accounts.usdc_mint.decimals,
+        )?;
+    }
 
     // Transfer USDC royalty to organizer if nonzero
     if royalty > 0 {
@@ -182,23 +165,6 @@ pub fn handle_buy_ticket(ctx: Context<BuyTicket>, max_price: u64) -> Result<()> 
                 },
             ),
             royalty,
-            ctx.accounts.usdc_mint.decimals,
-        )?;
-    }
-
-    // Transfer USDC protocol fee to treasury if nonzero
-    if protocol_fee > 0 {
-        token::transfer_checked(
-            CpiContext::new(
-                ctx.accounts.token_program.key(),
-                TransferChecked {
-                    from: ctx.accounts.buyer_usdc.to_account_info(),
-                    mint: ctx.accounts.usdc_mint.to_account_info(),
-                    to: ctx.accounts.protocol_usdc.to_account_info(),
-                    authority: ctx.accounts.buyer.to_account_info(),
-                },
-            ),
-            protocol_fee,
             ctx.accounts.usdc_mint.decimals,
         )?;
     }

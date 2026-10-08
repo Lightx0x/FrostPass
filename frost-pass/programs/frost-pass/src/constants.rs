@@ -30,9 +30,9 @@ pub const MAX_EVENT_DURATION: i64 = 365 * 24 * 3_600; // Maximum 1 year (in seco
 #[constant]
 pub const USDC_MINT: Pubkey = pubkey!("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU");
 
-// TODO: replace with the real protocol treasury wallet before deploy
+// Squads V4 Multisig Treasury Vault (controlled by Squads multisig GAyXYBjfNdZgo5Y4fU5whct6p5ngYKkH8imzqWgaruVW)
 #[constant]
-pub const PROTOCOL_TREASURY: Pubkey = pubkey!("FrostPassTreasuryP1aceho1der111111111111111");
+pub const PROTOCOL_TREASURY: Pubkey = pubkey!("9TRRTfqqfeMiACKETs6NUgdAamyxYLggNMbB2S1Jte97");
 
 pub const BPS_DENOMINATOR: u64 = 10_000; // 100% in basis points
 

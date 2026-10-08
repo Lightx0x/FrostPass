@@ -12,6 +12,10 @@ pub enum ErrorCode {
     ResaleLimitReached,
     #[msg("Event ended")]
     EventEnded,
+    #[msg("Ticket sales have ended")]
+    SalesEnded,
+    #[msg("Sales must end in the future and no later than the event end")]
+    InvalidSalesEnd,
     #[msg("Event duration too short (minimum 1 hour)")]
     EventDurationTooShort,
     #[msg("Event duration too long (maximum 1 year)")]
@@ -60,4 +64,6 @@ pub enum ErrorCode {
     BuyerIsSeller,
     #[msg("Listing price exceeds max buyer price")]
     PriceExceedsMax,
+    #[msg("Signer is not the event organizer")]
+    NotOrganizer,
 }

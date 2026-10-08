@@ -15,7 +15,8 @@ pub struct EventConfig {
     pub markup_cap_bps: u16, // organizer's choice, <= MAX_MARKUP_BPS
     pub royalty_bps: u16,    // organizer's choice, <= MAX_ROYALTY_BPS
 
-    pub event_end: i64,
+    pub sales_end: i64, // no mint / list / buy after this
+    pub event_end: i64, // tickets can be redeemed until this
 
     #[max_len(MAX_SCANNERS)]
     pub scanners: Vec<Pubkey>,

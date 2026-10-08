@@ -10,10 +10,10 @@ pub const TICKET_SEED: &[u8] = b"ticket";
 pub const MAX_RESALE: u8 = 2; // Max amount of resales allowed
 
 #[constant]
-pub const MAX_ROYALTY_BPS: u16 = 300; // 3% in basis points, organizer's royalty_bps can't exceed this
+pub const MAX_ROYALTY_BPS: u16 = 500; // 5% in basis points, organizer's royalty_bps can't exceed this
 
 #[constant]
-pub const PROTOCOL_FEE_BPS: u16 = 200; // 2% in basis points
+pub const MINT_FEE: u64 = 250_000; // 0.25 USDC protocol fee per primary mint, paid by the minter on top of ticket_price
 
 #[constant]
 pub const MAX_MARKUP_BPS: u16 = 2_000; // 20% in basis points
@@ -36,6 +36,11 @@ pub const PROTOCOL_TREASURY: Pubkey = pubkey!("FrostPassTreasuryP1aceho1der11111
 
 pub const BPS_DENOMINATOR: u64 = 10_000; // 100% in basis points
 
-pub const CHALLENGE_DOMAIN: &[u8; 16] = b"FROSTPASS_TKT_V1";
+#[constant]
+pub const CHALLENGE_DOMAIN: &[u8] = b"FROSTPASS_TKT_V1"; // 16 bytes, part of the signed redeem message
+const _: () = assert!(CHALLENGE_DOMAIN.len() == 16);
+
 pub const CHALLENGE_NONCE_LENGTH: usize = 16;
+
+#[constant]
 pub const CHALLENGE_VALIDITY_SECONDS: i64 = 90;

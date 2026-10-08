@@ -25,6 +25,7 @@ pub mod frost_pass {
         ticket_supply: u32,
         markup_cap_bps: u16,
         royalty_bps: u16,
+        sales_end: i64,
         event_end: i64,
         scanners: Vec<Pubkey>,
     ) -> Result<()> {
@@ -37,9 +38,14 @@ pub mod frost_pass {
             ticket_supply,
             markup_cap_bps,
             royalty_bps,
+            sales_end,
             event_end,
             scanners,
         )
+    }
+
+    pub fn update_scanners(ctx: Context<UpdateScanners>, scanners: Vec<Pubkey>) -> Result<()> {
+        instructions::handle_update_scanners(ctx, scanners)
     }
 
     pub fn mint_ticket(ctx: Context<MintTicket>) -> Result<()> {

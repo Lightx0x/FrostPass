@@ -39,7 +39,7 @@ pub fn handle_list_ticket(ctx: Context<ListTicket>, list_price: u64) -> Result<(
     let event_config = &ctx.accounts.event_config;
     let current_time = Clock::get()?.unix_timestamp;
 
-    require!(current_time < event_config.event_end, ErrorCode::EventEnded);
+    require!(current_time < event_config.sales_end, ErrorCode::SalesEnded);
 
     let ticket_asset = load_ticket_asset(&ctx.accounts.ticket_asset, event_config)?;
     require!(
@@ -61,7 +61,6 @@ pub fn handle_list_ticket(ctx: Context<ListTicket>, list_price: u64) -> Result<(
         .checked_div(BPS_DENOMINATOR as u128)
         .ok_or(ErrorCode::MathOverflow)?;
 
-    require!(list_price > 0, ErrorCode::InvalidPrice);
     require!(list_price as u128 <= max_price, ErrorCode::PriceAboveCap);
 
     let ticket_state = &mut ctx.accounts.ticket_state;

@@ -3,7 +3,7 @@ use anchor_spl::token::{self, Mint, Token, TokenAccount, TransferChecked};
 use mpl_core::{accounts::BaseCollectionV1, instructions::CreateV1CpiBuilder, ID as MPL_CORE_ID};
 
 use crate::{
-    constants::{EVENT_SEED, TICKET_SEED, USDC_MINT},
+    constants::{EVENT_SEED, MINT_FEE, PROTOCOL_TREASURY, TICKET_SEED, USDC_MINT},
     error::ErrorCode,
     state::{EventConfig, TicketState},
 };
@@ -63,6 +63,14 @@ pub struct MintTicket<'info> {
     )]
     pub organizer_usdc: Account<'info, TokenAccount>,
 
+    #[account(
+        mut,
+        associated_token::mint = usdc_mint,
+        associated_token::authority = PROTOCOL_TREASURY,
+        associated_token::token_program = token_program,
+    )]
+    pub treasury_usdc: Account<'info, TokenAccount>,
+
     pub token_program: Program<'info, Token>,
 
     /// CHECK: Address is constrained to the Metaplex Core program ID.
@@ -76,7 +84,7 @@ pub fn handle_mint_ticket(ctx: Context<MintTicket>) -> Result<()> {
     let event_config = &ctx.accounts.event_config;
     let current_time = Clock::get()?.unix_timestamp;
 
-    require!(current_time < event_config.event_end, ErrorCode::EventEnded);
+    require!(current_time < event_config.sales_end, ErrorCode::SalesEnded);
     require!(
         event_config.tickets_minted < event_config.ticket_supply,
         ErrorCode::EventSoldOut
@@ -104,6 +112,21 @@ pub fn handle_mint_ticket(ctx: Context<MintTicket>) -> Result<()> {
             },
         ),
         event_config.ticket_price,
+        ctx.accounts.usdc_mint.decimals,
+    )?;
+
+    // Fixed protocol fee, paid by the minter on top of ticket_price
+    token::transfer_checked(
+        CpiContext::new(
+            ctx.accounts.token_program.key(),
+            TransferChecked {
+                from: ctx.accounts.minter_usdc.to_account_info(),
+                mint: ctx.accounts.usdc_mint.to_account_info(),
+                to: ctx.accounts.treasury_usdc.to_account_info(),
+                authority: ctx.accounts.minter.to_account_info(),
+            },
+        ),
+        MINT_FEE,
         ctx.accounts.usdc_mint.decimals,
     )?;
 

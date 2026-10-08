@@ -11,10 +11,11 @@ use mpl_core::{
 use crate::{
     constants::{
         EVENT_SEED, MAX_EVENT_DURATION, MAX_MARKUP_BPS, MAX_NAME_LENGTH, MAX_ROYALTY_BPS,
-        MAX_SCANNERS, MAX_URI_LENGTH, MIN_EVENT_DURATION,
+        MAX_URI_LENGTH, MIN_EVENT_DURATION,
     },
     error::ErrorCode,
     state::EventConfig,
+    utils::validate_scanners,
 };
 
 #[derive(Accounts)]
@@ -51,6 +52,7 @@ pub fn handle_init_event(
     ticket_supply: u32,
     markup_cap_bps: u16,
     royalty_bps: u16,
+    sales_end: i64,
     event_end: i64,
     scanners: Vec<Pubkey>,
 ) -> Result<()> {
@@ -64,6 +66,10 @@ pub fn handle_init_event(
     require!(
         event_end <= clock.unix_timestamp + MAX_EVENT_DURATION,
         ErrorCode::EventDurationTooLong
+    );
+    require!(
+        sales_end > clock.unix_timestamp && sales_end <= event_end,
+        ErrorCode::InvalidSalesEnd
     );
     require!(ticket_supply > 0, ErrorCode::InvalidSupplyAmount);
     require!(ticket_price > 0, ErrorCode::InvalidPrice);
@@ -93,22 +99,7 @@ pub fn handle_init_event(
     );
 
     // Scanner Validations
-    require!(!scanners.is_empty(), ErrorCode::NoScannersProvided);
-    require!(scanners.len() <= MAX_SCANNERS, ErrorCode::TooManyScanners);
-    require!(
-        !scanners.contains(&Pubkey::default()),
-        ErrorCode::InvalidScanner
-    );
-
-    // Reject duplicate scanners
-    for scanner in 0..scanners.len() {
-        for next_scanner in (scanner + 1)..scanners.len() {
-            require!(
-                scanners[scanner] != scanners[next_scanner],
-                ErrorCode::DuplicateScanner
-            );
-        }
-    }
+    validate_scanners(&scanners)?;
 
     let event_config_info = ctx.accounts.event_config.to_account_info();
 
@@ -146,6 +137,7 @@ pub fn handle_init_event(
     event_config.tickets_minted = 0;
     event_config.markup_cap_bps = markup_cap_bps;
     event_config.royalty_bps = royalty_bps;
+    event_config.sales_end = sales_end;
     event_config.event_end = event_end;
     event_config.scanners = scanners;
     event_config.bump = ctx.bumps.event_config;

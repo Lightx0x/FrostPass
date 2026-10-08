@@ -1,8 +1,5 @@
-use anchor_lang::{
-    prelude::*,
-    system_program::{transfer, Transfer},
-};
-use mpl_core::{instructions::BurnV1CpiBuilder, ID as MPL_CORE_ID};
+use anchor_lang::prelude::*;
+use mpl_core::ID as MPL_CORE_ID;
 use solana_instructions_sysvar::get_instruction_relative;
 
 use crate::{
@@ -12,7 +9,7 @@ use crate::{
     },
     error::ErrorCode,
     state::{EventConfig, TicketState},
-    utils::load_ticket_asset,
+    utils::{burn_ticket, load_ticket_asset},
 };
 
 const ED25519_PROGRAM_ID: Pubkey = pubkey!("Ed25519SigVerify111111111111111111111111111");
@@ -87,6 +84,7 @@ pub fn handle_redeem_ticket(
         ErrorCode::InvalidScanner
     );
 
+    require!(!event_config.cancelled, ErrorCode::EventCancelled);
     require!(current_time < event_config.event_end, ErrorCode::EventEnded);
 
     require!(current_time <= expiry, ErrorCode::ChallengeExpired);
@@ -129,37 +127,18 @@ pub fn handle_redeem_ticket(
         &bump_seed,
     ];
 
-    // mpl-core refunds the burned asset's rent to the burn payer (the scanner)
-    let scanner_lamports_before = ctx.accounts.scanner.lamports();
-
-    BurnV1CpiBuilder::new(&ctx.accounts.mpl_core_program.to_account_info())
-        .asset(&ctx.accounts.ticket_asset.to_account_info())
-        .collection(Some(&ctx.accounts.collection.to_account_info()))
-        .payer(&ctx.accounts.scanner.to_account_info())
-        .authority(Some(&ctx.accounts.event_config.to_account_info()))
-        .system_program(Some(&ctx.accounts.system_program.to_account_info()))
-        .invoke_signed(&[signer_seeds])?;
-
-    // Forward that refund to `user`, the ticket's last owner before redeem
-    // (does not have to be the original minter)
-    let asset_rent_refund = ctx
-        .accounts
-        .scanner
-        .lamports()
-        .saturating_sub(scanner_lamports_before);
-
-    if asset_rent_refund > 0 {
-        transfer(
-            CpiContext::new(
-                ctx.accounts.system_program.key(),
-                Transfer {
-                    from: ctx.accounts.scanner.to_account_info(),
-                    to: ctx.accounts.user.to_account_info(),
-                },
-            ),
-            asset_rent_refund,
-        )?;
-    }
+    // Burn with the scanner as payer and forward the asset rent to `user`, the ticket's
+    // last owner before redeem (does not have to be the original minter)
+    burn_ticket(
+        &ctx.accounts.mpl_core_program.to_account_info(),
+        &ctx.accounts.ticket_asset.to_account_info(),
+        &ctx.accounts.collection.to_account_info(),
+        &ctx.accounts.event_config.to_account_info(),
+        &ctx.accounts.scanner.to_account_info(),
+        &ctx.accounts.user.to_account_info(),
+        &ctx.accounts.system_program.to_account_info(),
+        signer_seeds,
+    )?;
 
     Ok(())
 }

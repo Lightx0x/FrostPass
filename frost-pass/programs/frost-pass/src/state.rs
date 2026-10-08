@@ -18,6 +18,8 @@ pub struct EventConfig {
     pub sales_end: i64, // no mint / list / buy after this
     pub event_end: i64, // tickets can be redeemed until this
 
+    pub cancelled: bool, // set by cancel_event; blocks mint / list / buy / redeem, enables refund_ticket
+
     #[max_len(MAX_SCANNERS)]
     pub scanners: Vec<Pubkey>,
     pub bump: u8,
@@ -30,5 +32,12 @@ pub struct TicketState {
     pub resale_count: u8,
     pub seller: Option<Pubkey>, // Some(seller) = listed by this wallet, None = not for sale
     pub list_price: u64,
+    pub bump: u8,
+}
+
+#[account]
+#[derive(InitSpace)]
+pub struct MinterRecord {
+    pub count: u8, // primary mints by this wallet for this event
     pub bump: u8,
 }

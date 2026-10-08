@@ -139,6 +139,7 @@ pub fn handle_init_event(
     event_config.royalty_bps = royalty_bps;
     event_config.sales_end = sales_end;
     event_config.event_end = event_end;
+    event_config.cancelled = false;
     event_config.scanners = scanners;
     event_config.bump = ctx.bumps.event_config;
 

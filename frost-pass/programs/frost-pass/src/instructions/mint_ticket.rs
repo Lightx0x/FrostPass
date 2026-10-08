@@ -3,9 +3,12 @@ use anchor_spl::token::{self, Mint, Token, TokenAccount, TransferChecked};
 use mpl_core::{accounts::BaseCollectionV1, instructions::CreateV1CpiBuilder, ID as MPL_CORE_ID};
 
 use crate::{
-    constants::{EVENT_SEED, MINT_FEE, PROTOCOL_TREASURY, TICKET_SEED, USDC_MINT},
+    constants::{
+        EVENT_SEED, MAX_MINTS_PER_WALLET, MINTER_SEED, MINT_FEE, PROTOCOL_TREASURY, TICKET_SEED,
+        USDC_MINT,
+    },
     error::ErrorCode,
-    state::{EventConfig, TicketState},
+    state::{EventConfig, MinterRecord, TicketState},
 };
 
 #[derive(Accounts)]
@@ -43,6 +46,15 @@ pub struct MintTicket<'info> {
         bump,
     )]
     pub ticket_state: Account<'info, TicketState>,
+
+    #[account(
+        init_if_needed,
+        payer = minter,
+        space = MinterRecord::DISCRIMINATOR.len() + MinterRecord::INIT_SPACE,
+        seeds = [MINTER_SEED, event_config.key().as_ref(), minter.key().as_ref()],
+        bump,
+    )]
+    pub minter_record: Account<'info, MinterRecord>,
 
     #[account(address = USDC_MINT @ ErrorCode::InvalidUsdcMint)]
     pub usdc_mint: Account<'info, Mint>,
@@ -84,7 +96,12 @@ pub fn handle_mint_ticket(ctx: Context<MintTicket>) -> Result<()> {
     let event_config = &ctx.accounts.event_config;
     let current_time = Clock::get()?.unix_timestamp;
 
+    require!(!event_config.cancelled, ErrorCode::EventCancelled);
     require!(current_time < event_config.sales_end, ErrorCode::SalesEnded);
+    require!(
+        ctx.accounts.minter_record.count < MAX_MINTS_PER_WALLET,
+        ErrorCode::MintLimitReached
+    );
     require!(
         event_config.tickets_minted < event_config.ticket_supply,
         ErrorCode::EventSoldOut
@@ -159,6 +176,13 @@ pub fn handle_mint_ticket(ctx: Context<MintTicket>) -> Result<()> {
     ticket_state.bump = ctx.bumps.ticket_state;
 
     ctx.accounts.event_config.tickets_minted = ticket_number;
+
+    let minter_record = &mut ctx.accounts.minter_record;
+    minter_record.count = minter_record
+        .count
+        .checked_add(1)
+        .ok_or(ErrorCode::MathOverflow)?;
+    minter_record.bump = ctx.bumps.minter_record;
 
     Ok(())
 }

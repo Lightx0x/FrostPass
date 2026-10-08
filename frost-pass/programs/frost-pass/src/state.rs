@@ -32,3 +32,10 @@ pub struct TicketState {
     pub list_price: u64,
     pub bump: u8,
 }
+
+#[account]
+#[derive(InitSpace)]
+pub struct MinterRecord {
+    pub count: u8, // primary mints by this wallet for this event
+    pub bump: u8,
+}

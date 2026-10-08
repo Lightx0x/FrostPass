@@ -64,4 +64,6 @@ pub enum ErrorCode {
     PriceExceedsMax,
     #[msg("Signer is not the event organizer")]
     NotOrganizer,
+    #[msg("Wallet reached the mint limit for this event")]
+    MintLimitReached,
 }

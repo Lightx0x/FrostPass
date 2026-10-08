@@ -7,7 +7,13 @@ pub const EVENT_SEED: &[u8] = b"event";
 pub const TICKET_SEED: &[u8] = b"ticket";
 
 #[constant]
+pub const MINTER_SEED: &[u8] = b"minter";
+
+#[constant]
 pub const MAX_RESALE: u8 = 2; // Max amount of resales allowed
+
+#[constant]
+pub const MAX_MINTS_PER_WALLET: u8 = 3; // Primary mints per wallet per event (devnet run; revisit for mainnet)
 
 #[constant]
 pub const MAX_ROYALTY_BPS: u16 = 500; // 5% in basis points, organizer's royalty_bps can't exceed this

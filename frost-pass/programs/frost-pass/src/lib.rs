@@ -71,4 +71,12 @@ pub mod frost_pass {
     ) -> Result<()> {
         instructions::handle_redeem_ticket(ctx, nonce, expiry)
     }
+
+    pub fn cancel_event(ctx: Context<CancelEvent>) -> Result<()> {
+        instructions::handle_cancel_event(ctx)
+    }
+
+    pub fn refund_ticket(ctx: Context<RefundTicket>) -> Result<()> {
+        instructions::handle_refund_ticket(ctx)
+    }
 }

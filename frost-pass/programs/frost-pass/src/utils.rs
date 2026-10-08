@@ -1,6 +1,10 @@
-use anchor_lang::prelude::*;
+use anchor_lang::{
+    prelude::*,
+    system_program::{transfer, Transfer},
+};
 use mpl_core::{
     accounts::BaseAssetV1,
+    instructions::BurnV1CpiBuilder,
     types::{Key, UpdateAuthority},
 };
 
@@ -42,6 +46,49 @@ pub fn validate_scanners(scanners: &[Pubkey]) -> Result<()> {
                 ErrorCode::DuplicateScanner
             );
         }
+    }
+
+    Ok(())
+}
+
+// Burns a ticket with the event's permanent burn delegate (the EventConfig PDA signs with
+// `signer_seeds`) and sends the burned asset's rent to `rent_recipient`.
+// mpl-core refunds that rent to the burn payer, so if the payer isn't the recipient,
+// the refunded amount is forwarded from the payer (who must be a signer) to the recipient.
+#[allow(clippy::too_many_arguments)]
+pub fn burn_ticket<'info>(
+    mpl_core_program: &AccountInfo<'info>,
+    ticket_asset: &AccountInfo<'info>,
+    collection: &AccountInfo<'info>,
+    event_config: &AccountInfo<'info>,
+    payer: &AccountInfo<'info>,
+    rent_recipient: &AccountInfo<'info>,
+    system_program: &AccountInfo<'info>,
+    signer_seeds: &[&[u8]],
+) -> Result<()> {
+    let payer_lamports_before = payer.lamports();
+
+    BurnV1CpiBuilder::new(mpl_core_program)
+        .asset(ticket_asset)
+        .collection(Some(collection))
+        .payer(payer)
+        .authority(Some(event_config))
+        .system_program(Some(system_program))
+        .invoke_signed(&[signer_seeds])?;
+
+    let asset_rent_refund = payer.lamports().saturating_sub(payer_lamports_before);
+
+    if asset_rent_refund > 0 && payer.key != rent_recipient.key {
+        transfer(
+            CpiContext::new(
+                *system_program.key,
+                Transfer {
+                    from: payer.clone(),
+                    to: rent_recipient.clone(),
+                },
+            ),
+            asset_rent_refund,
+        )?;
     }
 
     Ok(())

@@ -66,4 +66,8 @@ pub enum ErrorCode {
     NotOrganizer,
     #[msg("Wallet reached the mint limit for this event")]
     MintLimitReached,
+    #[msg("Event is cancelled")]
+    EventCancelled,
+    #[msg("Event is not cancelled")]
+    EventNotCancelled,
 }

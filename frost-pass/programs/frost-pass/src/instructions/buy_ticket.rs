@@ -96,6 +96,7 @@ pub fn handle_buy_ticket(ctx: Context<BuyTicket>, max_price: u64) -> Result<()> 
     let event_config = &ctx.accounts.event_config;
     let current_time = Clock::get()?.unix_timestamp;
 
+    require!(!event_config.cancelled, ErrorCode::EventCancelled);
     require!(current_time < event_config.sales_end, ErrorCode::SalesEnded);
 
     let ticket_state = &ctx.accounts.ticket_state;

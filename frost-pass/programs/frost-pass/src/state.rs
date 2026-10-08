@@ -18,6 +18,8 @@ pub struct EventConfig {
     pub sales_end: i64, // no mint / list / buy after this
     pub event_end: i64, // tickets can be redeemed until this
 
+    pub cancelled: bool, // set by cancel_event; blocks mint / list / buy / redeem, enables refund_ticket
+
     #[max_len(MAX_SCANNERS)]
     pub scanners: Vec<Pubkey>,
     pub bump: u8,

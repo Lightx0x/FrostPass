@@ -96,6 +96,7 @@ pub fn handle_mint_ticket(ctx: Context<MintTicket>) -> Result<()> {
     let event_config = &ctx.accounts.event_config;
     let current_time = Clock::get()?.unix_timestamp;
 
+    require!(!event_config.cancelled, ErrorCode::EventCancelled);
     require!(current_time < event_config.sales_end, ErrorCode::SalesEnded);
     require!(
         ctx.accounts.minter_record.count < MAX_MINTS_PER_WALLET,

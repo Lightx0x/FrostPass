@@ -84,7 +84,7 @@ pub fn handle_mint_ticket(ctx: Context<MintTicket>) -> Result<()> {
     let event_config = &ctx.accounts.event_config;
     let current_time = Clock::get()?.unix_timestamp;
 
-    require!(current_time < event_config.event_end, ErrorCode::EventEnded);
+    require!(current_time < event_config.sales_end, ErrorCode::SalesEnded);
     require!(
         event_config.tickets_minted < event_config.ticket_supply,
         ErrorCode::EventSoldOut

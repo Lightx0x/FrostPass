@@ -25,6 +25,7 @@ pub mod frost_pass {
         ticket_supply: u32,
         markup_cap_bps: u16,
         royalty_bps: u16,
+        sales_end: i64,
         event_end: i64,
         scanners: Vec<Pubkey>,
     ) -> Result<()> {
@@ -37,6 +38,7 @@ pub mod frost_pass {
             ticket_supply,
             markup_cap_bps,
             royalty_bps,
+            sales_end,
             event_end,
             scanners,
         )

@@ -51,6 +51,7 @@ pub fn handle_init_event(
     ticket_supply: u32,
     markup_cap_bps: u16,
     royalty_bps: u16,
+    sales_end: i64,
     event_end: i64,
     scanners: Vec<Pubkey>,
 ) -> Result<()> {
@@ -64,6 +65,10 @@ pub fn handle_init_event(
     require!(
         event_end <= clock.unix_timestamp + MAX_EVENT_DURATION,
         ErrorCode::EventDurationTooLong
+    );
+    require!(
+        sales_end > clock.unix_timestamp && sales_end <= event_end,
+        ErrorCode::InvalidSalesEnd
     );
     require!(ticket_supply > 0, ErrorCode::InvalidSupplyAmount);
     require!(ticket_price > 0, ErrorCode::InvalidPrice);
@@ -146,6 +151,7 @@ pub fn handle_init_event(
     event_config.tickets_minted = 0;
     event_config.markup_cap_bps = markup_cap_bps;
     event_config.royalty_bps = royalty_bps;
+    event_config.sales_end = sales_end;
     event_config.event_end = event_end;
     event_config.scanners = scanners;
     event_config.bump = ctx.bumps.event_config;

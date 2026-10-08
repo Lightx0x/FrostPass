@@ -70,4 +70,6 @@ pub enum ErrorCode {
     EventCancelled,
     #[msg("Event is not cancelled")]
     EventNotCancelled,
+    #[msg("Event has not ended yet")]
+    EventNotEnded,
 }

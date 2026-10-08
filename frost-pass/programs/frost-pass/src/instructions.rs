@@ -1,5 +1,6 @@
 pub mod buy_ticket;
 pub mod cancel_event;
+pub mod close_ticket;
 pub mod delist_ticket;
 pub mod init_event;
 pub mod list_ticket;
@@ -10,6 +11,7 @@ pub mod update_scanners;
 
 pub use buy_ticket::*;
 pub use cancel_event::*;
+pub use close_ticket::*;
 pub use delist_ticket::*;
 pub use init_event::*;
 pub use list_ticket::*;

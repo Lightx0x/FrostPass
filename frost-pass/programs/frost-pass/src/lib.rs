@@ -79,4 +79,8 @@ pub mod frost_pass {
     pub fn refund_ticket(ctx: Context<RefundTicket>) -> Result<()> {
         instructions::handle_refund_ticket(ctx)
     }
+
+    pub fn close_ticket(ctx: Context<CloseTicket>) -> Result<()> {
+        instructions::handle_close_ticket(ctx)
+    }
 }

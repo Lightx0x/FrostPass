@@ -126,6 +126,7 @@ pub fn handle_init_event(
         .name(name)
         .uri(uri)
         .plugins(plugins)
+        .system_program(&ctx.accounts.system_program.to_account_info())
         .invoke()?;
 
     let event_config = &mut ctx.accounts.event_config;

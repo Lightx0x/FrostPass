@@ -65,7 +65,7 @@ pub struct MintTicket<'info> {
         associated_token::authority = minter,
         associated_token::token_program = token_program,
     )]
-    pub minter_usdc: Account<'info, TokenAccount>,
+    pub minter_usdc: Box<Account<'info, TokenAccount>>,
 
     #[account(
         mut,
@@ -73,7 +73,7 @@ pub struct MintTicket<'info> {
         associated_token::authority = event_config.organizer,
         associated_token::token_program = token_program,
     )]
-    pub organizer_usdc: Account<'info, TokenAccount>,
+    pub organizer_usdc: Box<Account<'info, TokenAccount>>,
 
     #[account(
         mut,
@@ -81,7 +81,7 @@ pub struct MintTicket<'info> {
         associated_token::authority = PROTOCOL_TREASURY,
         associated_token::token_program = token_program,
     )]
-    pub treasury_usdc: Account<'info, TokenAccount>,
+    pub treasury_usdc: Box<Account<'info, TokenAccount>>,
 
     pub token_program: Program<'info, Token>,
 

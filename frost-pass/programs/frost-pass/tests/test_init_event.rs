@@ -1,12 +1,8 @@
 mod common;
 
 use anchor_lang::{
-    prelude::Pubkey,
-    solana_program::instruction::Instruction,
-    system_program,
-    AccountDeserialize,
-    InstructionData,
-    ToAccountMetas,
+    prelude::Pubkey, solana_program::instruction::Instruction, system_program, AccountDeserialize,
+    InstructionData, ToAccountMetas,
 };
 use common::TestContext;
 use frost_pass::{
@@ -22,8 +18,8 @@ use mpl_core::{
     accounts::BaseCollectionV1,
     fetch_plugin,
     types::{
-        PermanentBurnDelegate, PermanentFreezeDelegate, PermanentTransferDelegate,
-        PluginAuthority, PluginType,
+        PermanentBurnDelegate, PermanentFreezeDelegate, PermanentTransferDelegate, PluginAuthority,
+        PluginType,
     },
     ID as MPL_CORE_ID,
 };
@@ -32,6 +28,7 @@ use solana_message::Message;
 use solana_signer::Signer;
 use solana_transaction::Transaction;
 
+#[derive(Clone)]
 struct InitEventParams {
     event_id: u32,
     name: String,
@@ -157,7 +154,7 @@ fn test_init_event_success_and_deep_verification() {
         &FROST_PASS_ID,
     );
 
-    let res = execute_init_event(&mut context, &collection, params);
+    let res = execute_init_event(&mut context, &collection, params.clone());
     assert!(res.is_ok(), "Expected success, got: {:?}", res.err());
 
     // 1. Deep verify EventConfig deserialization & fields
@@ -166,8 +163,8 @@ fn test_init_event_success_and_deep_verification() {
         .get_account(&event_config_pda)
         .expect("EventConfig account should exist");
     let mut data_slice: &[u8] = &event_config_account.data;
-    let event_config = EventConfig::try_deserialize(&mut data_slice)
-        .expect("Failed to deserialize EventConfig");
+    let event_config =
+        EventConfig::try_deserialize(&mut data_slice).expect("Failed to deserialize EventConfig");
 
     assert_eq!(event_config.event_id, event_id);
     assert_eq!(event_config.organizer, organizer_pubkey);
@@ -179,6 +176,7 @@ fn test_init_event_success_and_deep_verification() {
     assert_eq!(event_config.royalty_bps, 500);
     assert_eq!(event_config.sales_end, 3_600 * 24);
     assert_eq!(event_config.event_end, 3_600 * 48);
+    assert_eq!(event_config.scanners, params.scanners);
     assert!(!event_config.cancelled);
     assert_eq!(event_config.bump, bump);
 
@@ -193,10 +191,12 @@ fn test_init_event_success_and_deep_verification() {
         .expect("Failed to deserialize BaseCollectionV1");
 
     assert_eq!(base_collection.name, "Coldplay Devnet Tour");
-    assert_eq!(base_collection.uri, "https://arweave.net/coldplay-metadata.json");
     assert_eq!(
-        base_collection.update_authority,
-        event_config_pda,
+        base_collection.uri,
+        "https://arweave.net/coldplay-metadata.json"
+    );
+    assert_eq!(
+        base_collection.update_authority, event_config_pda,
         "Collection update_authority MUST be the EventConfig PDA"
     );
 
@@ -226,13 +226,17 @@ fn test_init_event_success_and_deep_verification() {
     .expect("PermanentBurnDelegate must exist on collection");
     assert_eq!(burn_auth, PluginAuthority::UpdateAuthority);
 
-    let (freeze_auth, freeze_plugin, _) = fetch_plugin::<BaseCollectionV1, PermanentFreezeDelegate>(
-        &account_info,
-        PluginType::PermanentFreezeDelegate,
-    )
-    .expect("PermanentFreezeDelegate must exist on collection");
+    let (freeze_auth, freeze_plugin, _) =
+        fetch_plugin::<BaseCollectionV1, PermanentFreezeDelegate>(
+            &account_info,
+            PluginType::PermanentFreezeDelegate,
+        )
+        .expect("PermanentFreezeDelegate must exist on collection");
     assert_eq!(freeze_auth, PluginAuthority::UpdateAuthority);
-    assert!(freeze_plugin.frozen, "Collection must be frozen = true to block unauthorized transfers");
+    assert!(
+        freeze_plugin.frozen,
+        "Collection must be frozen = true to block unauthorized transfers"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -338,7 +342,9 @@ fn test_init_event_boundary_scanners_count() {
     // 6 scanners must fail
     let mut params_exceeded = InitEventParams::default();
     params_exceeded.event_id = 502;
-    params_exceeded.scanners = (0..MAX_SCANNERS + 1).map(|_| Keypair::new().pubkey()).collect();
+    params_exceeded.scanners = (0..MAX_SCANNERS + 1)
+        .map(|_| Keypair::new().pubkey())
+        .collect();
     let res = execute_init_event(&mut context, &Keypair::new(), params_exceeded);
     assert_custom_error(&res.unwrap_err(), ErrorCode::TooManyScanners);
 }
@@ -466,11 +472,14 @@ fn test_init_event_fails_reinitializing_same_event_id() {
     assert!(res1.is_ok());
 
     let res2 = execute_init_event(&mut context, &collection2, InitEventParams::default());
-    assert!(res2.is_err(), "Expected failure when re-initializing same event_id");
+    assert!(
+        res2.is_err(),
+        "Expected failure when re-initializing same event_id"
+    );
     let logs = res2.unwrap_err();
     assert!(
-        logs.contains("already in use") || logs.contains("0x0"),
-        "Expected account already in use error, got: {}",
+        logs.contains("already in use"),
+        "Expected 'already in use' error in logs, got:\n{}",
         logs
     );
 }

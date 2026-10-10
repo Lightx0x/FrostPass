@@ -6,7 +6,7 @@
   [`https://github.com/metaplex-foundation/mpl-core/releases/tag/release%2Fcore%400.15.3`](https://github.com/metaplex-foundation/mpl-core/releases/tag/release%2Fcore%400.15.3)
 - **Direct Download URL:**
   `https://github.com/metaplex-foundation/mpl-core/releases/download/release/core@0.15.3/mpl_core_program.so`
-- **Program ID:** `CoREENxT6tWduKuWWydGRfdKgidcgTueqm6nvqm32hs`
+- **Program ID:** `CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d`
 - **Version:** `0.15.3` (pre-compiled SBF binary)
 
 ### How to update in the future:
@@ -17,5 +17,5 @@ curl -L -o programs/frost-pass/tests/fixtures/mpl_core_program.so \
 ```
 Or dump directly from devnet/mainnet if deployed:
 ```bash
-solana program dump -u m CoREENxT6tWduKuWWydGRfdKgidcgTueqm6nvqm32hs programs/frost-pass/tests/fixtures/mpl_core_program.so
+solana program dump -u m CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d programs/frost-pass/tests/fixtures/mpl_core_program.so
 ```

@@ -1,0 +1,18 @@
+[package]
+name = "frost-pass-client"
+version = "0.1.0"
+description = "Instruction builders and helpers for calling the FrostPass program off-chain"
+edition.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "frost_pass_client"
+
+[dependencies]
+frost-pass = { path = "../programs/frost-pass", features = ["no-entrypoint"] }
+anchor-lang = "1.2.0"
+anchor-spl = "1.2.0"
+mpl-core = "0.12.1"
+solana-ed25519-program = "3.0.0"
+solana-instructions-sysvar = "3.0.1"
+solana-signer = "3.0.0"

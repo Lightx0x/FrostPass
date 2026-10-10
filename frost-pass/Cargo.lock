@@ -1461,15 +1461,28 @@ version = "0.1.0"
 dependencies = [
  "anchor-lang",
  "anchor-spl",
+ "frost-pass-client",
  "litesvm",
  "mpl-core",
  "solana-account",
- "solana-ed25519-program",
  "solana-instructions-sysvar",
  "solana-keypair",
  "solana-message",
  "solana-signer",
  "solana-transaction",
+]
+
+[[package]]
+name = "frost-pass-client"
+version = "0.1.0"
+dependencies = [
+ "anchor-lang",
+ "anchor-spl",
+ "frost-pass",
+ "mpl-core",
+ "solana-ed25519-program",
+ "solana-instructions-sysvar",
+ "solana-signer",
 ]
 
 [[package]]

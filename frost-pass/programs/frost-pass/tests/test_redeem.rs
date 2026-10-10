@@ -67,7 +67,7 @@ fn redeem_rejects_invalid_scanner_signature_and_challenge() {
 
     // Valid signature, but by someone other than the ticket's owner
     let attacker = Keypair::new();
-    let challenge = RedeemChallenge::new(&event, &ticket, &holder.pubkey(), ctx.now());
+    let challenge = challenge_for(&event, &ticket, &holder.pubkey(), ctx.now());
     let logs = expect_failure(ctx.try_redeem_ticket(
         &event,
         &scanner,

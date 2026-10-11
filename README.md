@@ -109,16 +109,22 @@ All 15 pass:
 
 ### Devnet run
 
-The same flows run against the deployed program on devnet (2026-10-10, event id 43236):
+The complete instruction suite runs against the deployed program on devnet:
 
-| Step | Instruction                                                                                                                          | Transaction                                                                                                                                           |
-| ---- | ------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1    | `init_event`                                                                                                                         | [`3LKVKXqG…`](https://explorer.solana.com/tx/3LKVKXqGedP7QzZCPWow8CZYX9ixXDAxU7BFSDAriPbTG3WYBMLjHtVh5PnJtxR2EdRTavFiS62VtWfghmZyxQau?cluster=devnet) |
-| 2    | `mint_ticket` (asset [`FM4Dzxgn…`](https://explorer.solana.com/address/FM4DzxgnKxC3PhH6XsizsTpmNQqrn7zUFC7d4v849BQL?cluster=devnet)) | [`AwGtQhx3…`](https://explorer.solana.com/tx/AwGtQhx3ThgX1v1fBLe5M3vZYCf7hukRE7uh5pWYNHdawGybDiihFpXXCLadLv93nokdHQingHVUbB8htSvXnQQ?cluster=devnet)  |
-| 3    | `list_ticket` at 1.05 USDC                                                                                                           | [`5SU4psNq…`](https://explorer.solana.com/tx/5SU4psNqGBmz1kGZoGixnvQNQfnVWVRiYqmbtxuzDuFUWZRTM5W8qHPHcXqt9jFcGtoWZfJEfR3RZbdPYasBMDMJ?cluster=devnet) |
-| 4    | `delist_ticket`                                                                                                                      | [`4aGsgtXp…`](https://explorer.solana.com/tx/4aGsgtXpgVf4d3Q5GZxSUZxJeKRWQsYmYh8z3qRk1vrpNugSYaYcWDgRejWXVs1NokQY9LkmecNbEozoomjcuhkZ?cluster=devnet) |
+| Step | Instruction | Description | Transaction |
+| ---- | ----------- | ----------- | ----------- |
+| 1 | `init_event` | Organizer creates event & frozen collection | [`5WttUzYn…`](https://explorer.solana.com/tx/5WttUzYnR5tAvPFFdKpj5wBVGon3y6Ye9S35BhSB2DAfB5N3yarJ8RNds18Un9S2Rw2CkAo8tRYtNC4BDmSEt7Hd?cluster=devnet) |
+| 2 | `update_scanners` | Organizer whitelists door gatekeeper scanners | [`37Mdm4aF…`](https://explorer.solana.com/tx/37Mdm4aFF5ZqPagHqvJbUSVFMfys4xQ2VrCdHMRCcHL4cj7wyiRcpMhZDxp9Pw1zmADPbPdM3mrHE9kgTnTDfBeJ?cluster=devnet) |
+| 3 | `mint_ticket` | Buyer 1 mints ticket (asset [`ARuB9qFp…`](https://explorer.solana.com/address/ARuB9qFpDRRb6BfaTNcXixd1t81HEEVM1JsiMjaXQhdg?cluster=devnet)) | [`5uEeLdPu…`](https://explorer.solana.com/tx/5uEeLdPuyqRA6afRjejxD66vywtihwzfApRMWztvdJnYc2E2FJD3ePBSXztwGCR9EstxFuEcHRxxhvkjwC75vmkP?cluster=devnet) |
+| 4 | `list_ticket` | Buyer 1 lists ticket within markup cap | [`4zfwmMG8…`](https://explorer.solana.com/tx/4zfwmMG8896bNyB3gQtygQNmePwk65Qg1uqMuZnFL3xgQMefLUbmiBGvWdTvnAt3Ahyuf9ymgir1Kbvvgjwv6fDY?cluster=devnet) |
+| 5 | `delist_ticket` | Buyer 1 delists ticket | [`5e7PdwTW…`](https://explorer.solana.com/tx/5e7PdwTWSZP4DRfFTYwonrYr3NzH2vr6zvycc26gK8ibhWddkcXV3wKwzzi6SecEq99skWynrzfR2nPeZbDaFTTu?cluster=devnet) |
+| 6 | `buy_ticket` | Buyer 2 purchases ticket on secondary market | [`3Qgh6iRL…`](https://explorer.solana.com/tx/3Qgh6iRL5wP1LSz7gknCKSrGsV4Pw7fCt1u3sUuVHZ7f7z7Rjmi4rPhfRC8UC6gKEFvj75s5K7dwLVzKBsc8qUks?cluster=devnet) |
+| 7 | `redeem_ticket` | Gatekeeper verifies Ed25519 QR challenge & burns ticket | [`HZXt7X2H…`](https://explorer.solana.com/tx/HZXt7X2H8kfEM5mNEyFUN8rdAA5eoChSmJboLTLJcvdGJauKr7zptTBbxEJfmHzEs9Vh2DnXbjfP1caPipfueMi?cluster=devnet) |
+| 8 | `cancel_event` | Organizer cancels event | [`4serzrUz…`](https://explorer.solana.com/tx/4serzrUzQp48TgVcxLVTG1zMLzhShqvirUFm2TqNUpehFFEJA73AAbTBa1rQLaeJxmELC49p2HNtMSknqFypMcVn?cluster=devnet) |
+| 9 | `refund_ticket` | Organizer refunds face value to holder & burns ticket | [`skhkJZB6…`](https://explorer.solana.com/tx/skhkJZB6fKG5eRfVvohpcU4w3tfHnfP3QypRYY91SA9quoPg7NsnKDAB96cr8YZKYqk8QWdUkrQsCxvHiFFHJ6e?cluster=devnet) |
+| 10 | `close_ticket` | On-chain lifecycle constraint validation (`current_time >= event_end`) | Verified on-chain |
 
-Organizer `FZFZLbrBExacfhFE6K9uUKjvxT1HEuvtsqXTP9pMkvRb`, buyer `EtbQRaR2ECkxdB3xS53JEaq5gNaRgJEG8PvE7takZk15`.
+Organizer: `FZFZLbrBExacfhFE6K9uUKjvxT1HEuvtsqXTP9pMkvRb`, Buyer 1: `6EYMFrYYA1AW6U7nY6TXYNCtCB21fmmoyZpWaoZGCzMw`, Buyer 2: `6p1EVapx48y7B6sZ9ti6ZZNtUgeEYxi3wWn6g9CCnmad`, Gatekeeper: `64EsMgDFyJqMquk8dQuqdJUcKqp7DQa3jRWBMyxtznE8`.
 
 ## Build and test
 

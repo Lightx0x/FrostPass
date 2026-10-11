@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.89.0"
+          components: rustfmt, clippy
+
+      - name: Cache Solana install
+        id: solana-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/share/solana
+            ~/.cache/solana
+          key: solana-3.1.10
+
+      - name: Install Solana CLI (Agave 3.1.10)
+        if: steps.solana-cache.outputs.cache-hit != 'true'
+        run: sh -c "$(curl -sSfL https://release.anza.xyz/v3.1.10/install)"
+
+      - name: Add Solana to PATH
+        run: echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: frost-pass
+
+      - name: Format check
+        working-directory: frost-pass
+        run: cargo fmt --check
+
+      - name: Check
+        working-directory: frost-pass
+        run: cargo check --features idl-build
+
+      - name: Clippy
+        working-directory: frost-pass
+        run: cargo clippy -- -D warnings
+
+      - name: Build SBF
+        working-directory: frost-pass
+        run: cargo build-sbf --manifest-path programs/frost-pass/Cargo.toml --sbf-out-dir target/deploy
+
+      - name: Run tests
+        working-directory: frost-pass
+        run: cargo test -p frost-pass
+
+      - name: Deploy guard
+        run: ./frost-pass/scripts/check-deploy-constants.sh

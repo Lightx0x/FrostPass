@@ -64,7 +64,7 @@ jobs:
 
       - name: Run tests
         working-directory: frost-pass
-        run: cargo test -p frost-pass
+        run: cargo test --workspace
 
       - name: Deploy guard
         run: ./frost-pass/scripts/check-deploy-constants.sh

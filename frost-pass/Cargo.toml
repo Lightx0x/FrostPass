@@ -2,6 +2,7 @@
 members = [
     "programs/*",
     "client",
+    "cli",
 ]
 resolver = "2"
 

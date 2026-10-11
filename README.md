@@ -141,6 +141,28 @@ ANCHOR_WALLET=/path/to/wallet.json npm start
 ```
 *(The organizer wallet must be on Devnet with Devnet SOL for transaction fees and ~1 Devnet USDC).*
 
+## Terminal app
+
+`frostpass` is a terminal app for every actor, with one tab each:
+
+| Tab       | Actions                                                                        |
+| --------- | ------------------------------------------------------------------------------ |
+| Organizer | Create an event, replace its scanners, cancel it, refund holders at face value |
+| Minter    | Mint a ticket; list, delist or close your tickets; show your door pass         |
+| Buyer     | Buy a listing (with a maximum price); manage the tickets you hold              |
+| Scanner   | Paste or scan a holder's pass, see each check, and redeem the ticket           |
+
+The door pass is a QR code signed by the holder's wallet and valid for 60 seconds. Before sending anything, the app checks the program's rules (the same checks, in the same order and under the same error names) and shows exactly what will be paid and to whom for confirmation.
+
+```bash
+cd frost-pass
+cargo run -p frost-pass-cli --release -- --help
+cargo run -p frost-pass-cli --release                           # devnet, ~/.config/solana/id.json
+cargo run -p frost-pass-cli --release -- --keypair door.json    # act as another wallet
+```
+
+Each wallet acts as itself, so run one window per wallet to play several actors (for example, organizer and scanner).
+
 ## Build and test
 
 Requires Rust, the Solana CLI and Anchor CLI 1.2.0 (pinned in `frost-pass/Anchor.toml`; with `avm`, `anchor` switches to it automatically).
@@ -148,7 +170,7 @@ Requires Rust, the Solana CLI and Anchor CLI 1.2.0 (pinned in `frost-pass/Anchor
 ```bash
 cd frost-pass
 anchor build --arch v0
-cargo test -p frost-pass
+cargo test --workspace
 ```
 
 Build with `--arch v0`: Anchor 1.2 defaults to SBPF v3, which isn't enabled on devnet or mainnet yet, and LiteSVM refuses to load it.
@@ -161,5 +183,6 @@ frost-pass/
 │   ├── src/            # the on-chain program
 │   └── tests/          # LiteSVM integration tests and fixtures
 ├── client/             # frost-pass-client: instruction builders, PDAs, redeem challenge
+├── cli/                # frostpass: terminal app for organizers, minters, buyers and scanners
 └── scripts/            # deploy-time checks
 ```

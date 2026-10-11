@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.89.0"
+          components: rustfmt, clippy
+
+      - name: Install Solana CLI (Agave 3.1.10)
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/v3.1.10/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+
+      - name: Cache Solana install
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/solana
+          key: solana-3.1.10
+
+      - name: Cache Cargo registry & git
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-${{ hashFiles('frost-pass/Cargo.lock') }}
+
+      - name: Cache target
+        uses: actions/cache@v4
+        with:
+          path: frost-pass/target
+          key: target-${{ hashFiles('frost-pass/Cargo.lock') }}
+
+      - name: Format check
+        working-directory: frost-pass
+        run: cargo fmt --check
+
+      - name: Check
+        working-directory: frost-pass
+        run: cargo check --features idl-build
+
+      - name: Build SBF
+        working-directory: frost-pass
+        run: cargo build-sbf --manifest-path programs/frost-pass/Cargo.toml --sbf-out-dir target/deploy
+
+      - name: Run tests
+        working-directory: frost-pass
+        run: cargo test -p frost-pass
+
+      - name: Deploy guard
+        run: ./frost-pass/scripts/check-deploy-constants.sh

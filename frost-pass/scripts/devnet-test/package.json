@@ -1,10 +1,11 @@
 {
-  "name": "devnet-test",
+  "name": "frost-pass-devnet-test",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "End-to-end devnet test runner for FrostPass Anchor instructions",
+  "main": "run_all_instructions.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node run_all_instructions.js",
+    "test": "node run_all_instructions.js"
   },
   "keywords": [],
   "author": "",

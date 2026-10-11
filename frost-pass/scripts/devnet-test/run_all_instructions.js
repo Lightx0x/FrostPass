@@ -71,8 +71,12 @@ async function main() {
 
   const connection = new web3.Connection('https://api.devnet.solana.com', 'confirmed');
 
-  // Load Main Organizer Wallet
-  const organizerKeyPath = '/home/sohum/devnet-wallet.json';
+  // Load Main Organizer Wallet (supports ANCHOR_WALLET env or default solana CLI keypair)
+  const organizerKeyPath = process.env.ANCHOR_WALLET
+    || path.join(require('os').homedir(), '.config', 'solana', 'id.json');
+  if (!fs.existsSync(organizerKeyPath)) {
+    throw new Error(`Organizer wallet file not found at: ${organizerKeyPath}. Set ANCHOR_WALLET to your keypair path.`);
+  }
   const organizerSecret = JSON.parse(fs.readFileSync(organizerKeyPath, 'utf8'));
   const organizer = Keypair.fromSecretKey(Uint8Array.from(organizerSecret));
   console.log('Organizer Wallet:', organizer.publicKey.toBase58());
@@ -94,11 +98,11 @@ async function main() {
   // Generate auxiliary wallets for testing
   const buyer1 = Keypair.generate();
   const buyer2 = Keypair.generate();
-  const gatekeeper = Keypair.generate();
+  const scanner = Keypair.generate();
 
   console.log('Test Buyer 1:', buyer1.publicKey.toBase58());
   console.log('Test Buyer 2:', buyer2.publicKey.toBase58());
-  console.log('Test Gatekeeper:', gatekeeper.publicKey.toBase58());
+  console.log('Test Scanner:', scanner.publicKey.toBase58());
 
   console.log('\n--- Funding Test Wallets (SOL + Devnet USDC) ---');
   // Fund buyer1 and buyer2 with SOL for gas
@@ -138,13 +142,13 @@ async function main() {
   );
   await provider.sendAndConfirm(initAtasTx, [organizer]);
 
-  // Transfer 0.28 USDC to buyer1 and 0.28 USDC to buyer2 (price is 0.01 USDC + 0.25 mint fee = 0.26 USDC)
+  // Transfer 0.56 USDC to buyer1 (for 2 mints: Flow 1 and Flow 3) and 0.28 USDC to buyer2
   const transferUsdcTx = new web3.Transaction().add(
     spl.createTransferInstruction(
       organizerAta,
       buyer1Ata,
       organizer.publicKey,
-      280_000 // 0.28 USDC
+      560_000 // 0.56 USDC (2 x 0.26 USDC)
     ),
     spl.createTransferInstruction(
       organizerAta,
@@ -154,7 +158,7 @@ async function main() {
     )
   );
   await provider.sendAndConfirm(transferUsdcTx, [organizer]);
-  console.log('Funded Buyer 1 and Buyer 2 with 0.28 USDC each');
+  console.log('Funded Buyer 1 with 0.56 USDC and Buyer 2 with 0.28 USDC');
 
   // =========================================================================
   // FLOW 1: Standard Event Lifecycle & Instructions 1 to 7
@@ -201,9 +205,9 @@ async function main() {
     .rpc();
   console.log(`✓ init_event SUCCESS! Tx: ${initTx1}`);
 
-  console.log(`\n[2/10] Testing 'update_scanners' (adding Gatekeeper)...`);
+  console.log(`\n[2/10] Testing 'update_scanners' (adding Scanner)...`);
   const updateScannersTx = await program.methods
-    .updateScanners([organizer.publicKey, gatekeeper.publicKey])
+    .updateScanners([organizer.publicKey, scanner.publicKey])
     .accounts({
       organizer: organizer.publicKey,
       eventConfig: event1ConfigPda,
@@ -281,7 +285,7 @@ async function main() {
     })
     .signers([buyer1])
     .rpc();
-  console.log(`✓ Ticket relisted at 0.105 USDC`);
+  console.log(`✓ Ticket relisted at 0.011 USDC`);
 
   console.log(`\n[6/10] Testing 'buy_ticket' (Buyer 2 purchases ticket on secondary market)...`);
   const buyer2Provider = new anchor.AnchorProvider(
@@ -312,7 +316,7 @@ async function main() {
     .rpc();
   console.log(`✓ buy_ticket SUCCESS! New Owner is Buyer 2. Tx: ${buyTx1}`);
 
-  console.log(`\n[7/10] Testing 'redeem_ticket' (Gatekeeper validates challenge & redeems ticket)...`);
+  console.log(`\n[7/10] Testing 'redeem_ticket' (Scanner validates challenge & redeems ticket)...`);
   const crypto = require('crypto');
   const nonce = crypto.randomBytes(16);
   const slot = await connection.getSlot();
@@ -333,31 +337,31 @@ async function main() {
     message: challengeMessage,
   });
 
-  // Gatekeeper submits the redemption
-  const gatekeeperProvider = new anchor.AnchorProvider(
+  // Scanner submits the redemption
+  const scannerProvider = new anchor.AnchorProvider(
     connection,
-    new anchor.Wallet(gatekeeper),
+    new anchor.Wallet(scanner),
     { commitment: 'confirmed' }
   );
-  // Transfer SOL to gatekeeper for tx fee
-  const fundGatekeeperTx = new web3.Transaction().add(
+  // Transfer SOL to scanner for tx fee
+  const fundScannerTx = new web3.Transaction().add(
     SystemProgram.transfer({
       fromPubkey: organizer.publicKey,
-      toPubkey: gatekeeper.publicKey,
+      toPubkey: scanner.publicKey,
       lamports: 0.1 * web3.LAMPORTS_PER_SOL,
     })
   );
-  await provider.sendAndConfirm(fundGatekeeperTx, [organizer]);
+  await provider.sendAndConfirm(fundScannerTx, [organizer]);
 
-  const gatekeeperProgram = new anchor.Program(idl, gatekeeperProvider);
+  const scannerProgram = new anchor.Program(idl, scannerProvider);
 
-  const redeemTx = await gatekeeperProgram.methods
+  const redeemTx = await scannerProgram.methods
     .redeemTicket(
       Array.from(nonce),
       new BN(expiry.toString())
     )
     .accounts({
-      scanner: gatekeeper.publicKey,
+      scanner: scanner.publicKey,
       user: buyer2.publicKey,
       eventConfig: event1ConfigPda,
       collection: event1CollectionKp.publicKey,
@@ -368,7 +372,7 @@ async function main() {
       systemProgram: SystemProgram.programId,
     })
     .preInstructions([ed25519Ix])
-    .signers([gatekeeper])
+    .signers([scanner])
     .rpc();
   console.log(`✓ redeem_ticket SUCCESS! Ticket verified, burned and rent refunded. Tx: ${redeemTx}`);
 
@@ -478,38 +482,133 @@ async function main() {
   console.log('\n========================================================');
   console.log('FLOW 3: Post-Event Expiry & Rent Reclamation (close_ticket)');
   console.log('========================================================');
-  console.log(`\n[10/10] Testing 'close_ticket'...`);
-  console.log(`Note: On Solana Devnet Clock, 'close_ticket' requires Clock >= event_end.`);
-  console.log(`Because init_event enforces MIN_EVENT_DURATION = 1 hour (3600s),`);
-  console.log(`we verify close_ticket constraint validation against on-chain state.`);
 
-  try {
-    await buyer1Program.methods
+  // Handle standalone --close mode if executed with: node run_all_instructions.js --close <eventId> <ticketAssetPubkey>
+  const args = process.argv.slice(2);
+  if (args.includes('--close')) {
+    const closeIdx = args.indexOf('--close');
+    const targetEventId = parseInt(args[closeIdx + 1], 10);
+    const targetAssetStr = args[closeIdx + 2];
+    if (!targetEventId || !targetAssetStr) {
+      throw new Error('Usage: node run_all_instructions.js --close <eventId> <ticketAssetPubkey>');
+    }
+    const targetAssetPubkey = new PublicKey(targetAssetStr);
+    const [targetEventPda] = getEventConfigPda(organizer.publicKey, targetEventId);
+    const targetEventAcc = await program.account.eventConfig.fetch(targetEventPda);
+    const [targetStatePda] = getTicketStatePda(targetAssetPubkey);
+
+    console.log(`Executing post-expiry 'close_ticket' on Event #${targetEventId}, Asset: ${targetAssetStr}...`);
+    const closeTx = await buyer1Program.methods
       .closeTicket()
       .accounts({
         user: buyer1.publicKey,
-        eventConfig: event1ConfigPda,
-        collection: event1CollectionKp.publicKey,
-        ticketAsset: ticketAsset1.publicKey,
-        ticketState: ticketStatePda1,
+        eventConfig: targetEventPda,
+        collection: targetEventAcc.collection,
+        ticketAsset: targetAssetPubkey,
+        ticketState: targetStatePda,
         mplCoreProgram: MPL_CORE_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
       })
       .signers([buyer1])
       .rpc();
-    console.log(`✓ close_ticket executed successfully!`);
+    console.log(`✓ close_ticket SUCCESS! Ticket burned & rent reclaimed after event end. Tx: ${closeTx}`);
+    return;
+  }
+
+  // Create dedicated Event 3 and mint an unburned Ticket 3 held by Buyer 1
+  console.log(`\nInitializing Event 3 for 'close_ticket' lifecycle verification...`);
+  const event3Id = Math.floor(Math.random() * 80000) + 10000;
+  const [event3ConfigPda] = getEventConfigPda(organizer.publicKey, event3Id);
+  const event3CollectionKp = Keypair.generate();
+
+  const slot3 = await connection.getSlot();
+  const onChainTime3 = (await connection.getBlockTime(slot3)) || Math.floor(Date.now() / 1000);
+  const ticketPrice3 = new BN(10_000); // 0.01 USDC
+  const salesEnd3 = new BN(onChainTime3 + 3000);
+  const eventEnd3 = new BN(onChainTime3 + 3700); // 3700s ensures > MIN_EVENT_DURATION (3600s) on-chain
+
+  await retryWithBackoff(() => program.methods
+    .initEvent(
+      event3Id,
+      `Close Gate #${event3Id}`,
+      'https://arweave.net/frostpass-close.json',
+      ticketPrice3,
+      10,
+      1000,
+      500,
+      salesEnd3,
+      eventEnd3,
+      [organizer.publicKey]
+    )
+    .accounts({
+      organizer: organizer.publicKey,
+      eventConfig: event3ConfigPda,
+      collection: event3CollectionKp.publicKey,
+      mplCoreProgram: MPL_CORE_PROGRAM_ID,
+      systemProgram: SystemProgram.programId,
+    })
+    .signers([organizer, event3CollectionKp])
+    .rpc()
+  );
+
+  // Mint Ticket 3 to Buyer 1 (held and not burned)
+  const ticketAsset3 = Keypair.generate();
+  const [ticketStatePda3] = getTicketStatePda(ticketAsset3.publicKey);
+  const [minterRecordPda3] = getMinterRecordPda(event3ConfigPda, buyer1.publicKey);
+
+  await buyer1Program.methods
+    .mintTicket()
+    .accounts({
+      minter: buyer1.publicKey,
+      eventConfig: event3ConfigPda,
+      collection: event3CollectionKp.publicKey,
+      ticketAsset: ticketAsset3.publicKey,
+      ticketState: ticketStatePda3,
+      minterRecord: minterRecordPda3,
+      usdcMint: USDC_MINT,
+      minterUsdc: buyer1Ata,
+      organizerUsdc: organizerAta,
+      treasuryUsdc: TREASURY_USDC_ATA,
+      tokenProgram: spl.TOKEN_PROGRAM_ID,
+      mplCoreProgram: MPL_CORE_PROGRAM_ID,
+      systemProgram: SystemProgram.programId,
+    })
+    .signers([buyer1, ticketAsset3])
+    .rpc();
+  console.log(`✓ Active Ticket 3 minted for Event #${event3Id} (Asset: ${ticketAsset3.publicKey.toBase58()})`);
+
+  console.log(`\n[10/10] Testing 'close_ticket' on active event (verifying EventNotEnded constraint)...`);
+  try {
+    await buyer1Program.methods
+      .closeTicket()
+      .accounts({
+        user: buyer1.publicKey,
+        eventConfig: event3ConfigPda,
+        collection: event3CollectionKp.publicKey,
+        ticketAsset: ticketAsset3.publicKey,
+        ticketState: ticketStatePda3,
+        mplCoreProgram: MPL_CORE_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([buyer1])
+      .rpc();
+
+    throw new Error('Expected close_ticket to fail with EventNotEnded (6034), but it succeeded unexpectedly!');
   } catch (err) {
-    if (err.message && (err.message.includes('EventNotEnded') || err.message.includes('6002') || err.message.includes('AccountNotInitialized'))) {
-      console.log(`✓ close_ticket on-chain constraint properly enforced by program logic!`);
-      console.log(`  (Program verified current_time < event_end; rent reclaiming active after event end).`);
+    const errMsg = err.message || err.toString();
+    const isEventNotEnded = errMsg.includes('EventNotEnded') || errMsg.includes('6034');
+    if (isEventNotEnded) {
+      console.log(`✓ close_ticket constraint properly rejected with EventNotEnded (Error 6034)!`);
+      console.log(`  Verified on-chain rule: active tickets cannot be closed before event_end (${eventEnd3.toString()}).`);
+      console.log(`  (To execute successful post-event burn after 1 hour, run: node run_all_instructions.js --close ${event3Id} ${ticketAsset3.publicKey.toBase58()})`);
     } else {
-      console.log(`close_ticket validation result:`, err.message || err.toString());
+      throw new Error(`close_ticket failed with unexpected error (expected EventNotEnded/6034): ${errMsg}`);
     }
   }
 
-  console.log('\n====================================================');
-  console.log('  ALL 10 DEVNET INSTRUCTIONS TESTED & VERIFIED!      ');
-  console.log('====================================================\n');
+  console.log('\n=================================================================================');
+  console.log('  DEVNET INSTRUCTION SUITE COMPLETED (9 instructions finalized, 1 lifecycle gate verified)  ');
+  console.log('=================================================================================\n');
 }
 
 main().catch((err) => {

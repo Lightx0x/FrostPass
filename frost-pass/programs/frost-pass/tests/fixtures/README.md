@@ -2,20 +2,15 @@
 
 ## `mpl_core_program.so`
 
-- **Source:** Official release artifact from the Metaplex Core repository:
-  [`https://github.com/metaplex-foundation/mpl-core/releases/tag/release%2Fcore%400.15.3`](https://github.com/metaplex-foundation/mpl-core/releases/tag/release%2Fcore%400.15.3)
-- **Direct Download URL:**
-  `https://github.com/metaplex-foundation/mpl-core/releases/download/release/core@0.15.3/mpl_core_program.so`
+- **Source:** Deployed binary dump from Solana Devnet / Mainnet (`CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d`), trimmed to exact ELF size.
 - **Program ID:** `CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d`
-- **Version:** `0.15.3` (pre-compiled SBF binary)
+- **ProgramData Address:** `9ZC25KLUrfgSoFVgjE1rrydZBbZns58UXi8A8ZhTdGfr`
+- **Size:** 810,288 bytes
+- **SHA-256 Checksum:** `515541c84caa71a2f142c603fc1e2372196825003e66126d1e824dd9213ea056`
 
 ### How to update in the future:
-To update to a newer release of Metaplex Core:
+Dump directly from devnet/mainnet and trim zero padding down to the ELF size (`e_shoff + e_shnum * e_shentsize`):
 ```bash
-curl -L -o programs/frost-pass/tests/fixtures/mpl_core_program.so \
-  https://github.com/metaplex-foundation/mpl-core/releases/download/release%2Fcore%40<NEW_VERSION>/mpl_core_program.so
-```
-Or dump directly from devnet/mainnet if deployed:
-```bash
-solana program dump -u m CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d programs/frost-pass/tests/fixtures/mpl_core_program.so
+solana program dump -u d CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d /tmp/mpl_core_dump.so
+head -c 810288 /tmp/mpl_core_dump.so > programs/frost-pass/tests/fixtures/mpl_core_program.so
 ```

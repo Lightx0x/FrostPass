@@ -5,12 +5,15 @@
 //! frostpass --keypair scanner.json   # act as another wallet (e.g. a door scanner)
 //! frostpass --url localnet
 //! ```
+//!
+//! The transaction log and the event order are kept in `~/.local/share/frostpass/<cluster>/`
+//! (`$FROSTPASS_DATA` overrides the folder).
 
 use std::path::PathBuf;
 
 use anyhow::{anyhow, Context, Result};
 use clap::Parser;
-use frost_pass_cli::{chain::RpcChain, ui};
+use frost_pass_cli::{chain::RpcChain, store, ui};
 use solana_keypair::read_keypair_file;
 
 #[derive(Parser)]
@@ -60,5 +63,6 @@ fn main() -> Result<()> {
         "localnet" | "localhost" | "l" => "localnet".to_string(),
         _ => url.clone(),
     };
-    ui::run(RpcChain::new(&url), wallet, cluster)
+    let data_dir = store::data_dir(&cluster);
+    ui::run(RpcChain::new(&url), wallet, cluster, data_dir.as_deref())
 }

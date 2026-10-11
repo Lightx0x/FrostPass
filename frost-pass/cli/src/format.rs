@@ -43,6 +43,17 @@ pub fn sol(lamports: u64) -> String {
     format!("{:.4}", lamports as f64 / LAMPORTS_PER_SOL as f64)
 }
 
+/// Every lamport, without trailing zeros: `20_000` → `"0.00002"`, `1_500_000_000` → `"1.5"`.
+pub fn sol_exact(lamports: u64) -> String {
+    let whole = lamports / LAMPORTS_PER_SOL;
+    let fraction = lamports % LAMPORTS_PER_SOL;
+    if fraction == 0 {
+        return whole.to_string();
+    }
+    let digits = format!("{fraction:09}");
+    format!("{whole}.{}", digits.trim_end_matches('0'))
+}
+
 /// `500` → `"5%"`, `1_050` → `"10.5%"`.
 pub fn percent(bps: u16) -> String {
     let whole = bps / 100;
@@ -98,6 +109,15 @@ pub fn parse_pubkeys(input: &str) -> Result<Vec<Pubkey>> {
 }
 
 /// `"2026-10-12 18:00 UTC"`.
+/// Search: every word of `query` appears in `text`, ignoring case and order
+/// (`"tech light"` finds `"Light Tech Meetup"`).
+pub fn matches_words(query: &str, text: &str) -> bool {
+    let text = text.to_lowercase();
+    query
+        .split_whitespace()
+        .all(|word| text.contains(&word.to_lowercase()))
+}
+
 pub fn datetime(unix: i64) -> String {
     DateTime::<Utc>::from_timestamp(unix, 0)
         .map(|time| time.format("%Y-%m-%d %H:%M UTC").to_string())
@@ -156,6 +176,14 @@ pub fn parse_time(input: &str, now: i64) -> Result<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sol_exact_keeps_every_lamport() {
+        assert_eq!(sol_exact(0), "0");
+        assert_eq!(sol_exact(20_000), "0.00002");
+        assert_eq!(sol_exact(1_500_000_000), "1.5");
+        assert_eq!(sol_exact(12_539_280), "0.01253928");
+    }
 
     #[test]
     fn amounts_rates_and_times_round_trip() {

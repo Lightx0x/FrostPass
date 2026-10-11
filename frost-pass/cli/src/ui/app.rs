@@ -1,7 +1,11 @@
 //! App state and input handling. Network calls never run inside a key handler: the handler
 //! queues a [`Job`] and sets a busy status, the loop draws that, then runs the job.
 
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    cell::Cell,
+    path::Path,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use anchor_lang::prelude::Pubkey;
 use anyhow::Result;
@@ -19,7 +23,10 @@ use crate::{
     format,
     model::{self, EventInfo, TicketInfo},
     pass::Pass,
+    store::{LogEntry, SlotCache, TxLog},
 };
+
+use std::collections::HashSet;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tab {
@@ -27,10 +34,18 @@ pub enum Tab {
     Minter,
     Buyer,
     Scanner,
+    /// This wallet's transactions.
+    Log,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 4] = [Tab::Organizer, Tab::Minter, Tab::Buyer, Tab::Scanner];
+    pub const ALL: [Tab; 5] = [
+        Tab::Organizer,
+        Tab::Minter,
+        Tab::Buyer,
+        Tab::Scanner,
+        Tab::Log,
+    ];
 
     pub fn title(self) -> &'static str {
         match self {
@@ -38,6 +53,7 @@ impl Tab {
             Tab::Minter => "Minter",
             Tab::Buyer => "Buyer",
             Tab::Scanner => "Scanner",
+            Tab::Log => "Log",
         }
     }
 
@@ -102,6 +118,7 @@ pub struct ScanRecord {
 
 enum Job {
     Refresh,
+    RefreshLog,
     LoadTickets,
     Submit(Form),
     Prepare(Request),
@@ -138,9 +155,27 @@ pub struct App<C: Chain> {
     pub status: Status,
     pub report: Option<PassReport>,
     pub scans: Vec<ScanRecord>,
+    /// The search box (`/`): filters events by ID or name, and the log, on every tab.
+    pub search: String,
+    /// Typing goes to the search box.
+    pub searching: bool,
+    /// When each event was created, for listing newest first.
+    slots: SlotCache,
+    /// Events whose creation slot the cluster couldn't give; not asked again this run.
+    slot_misses: HashSet<Pubkey>,
+    /// Some events' creation slots are still being looked up (between key presses), so the
+    /// order isn't final yet.
+    pub ordering: bool,
+    pub log: TxLog,
+    pub log_index: usize,
+    /// How far the selected transaction's details are scrolled (rows).
+    pub log_scroll: u16,
+    /// Set by each draw: the furthest the details can scroll, and the rows on screen.
+    pub log_scroll_max: Cell<u16>,
+    pub log_page: Cell<u16>,
     pending: Option<Job>,
-    /// Text to put on the terminal's clipboard (the run loop sends it as an OSC 52 sequence).
-    pub clipboard: Option<String>,
+    /// What to copy (`"Pass"`) and the text; the run loop copies it, then calls [`Self::copied`].
+    pub clipboard: Option<(&'static str, String)>,
     pub quit: bool,
 }
 
@@ -184,10 +219,27 @@ impl<C: Chain> App<C> {
             },
             report: None,
             scans: Vec::new(),
+            search: String::new(),
+            searching: false,
+            slots: SlotCache::in_memory(),
+            slot_misses: HashSet::new(),
+            ordering: false,
+            log: TxLog::in_memory(),
+            log_index: 0,
+            log_scroll: 0,
+            log_scroll_max: Cell::new(0),
+            log_page: Cell::new(10),
             pending: Some(Job::Refresh),
             clipboard: None,
             quit: false,
         }
+    }
+
+    /// Keeps the event order and this wallet's transaction log in `dir` (see [`crate::store`]).
+    pub fn with_store(mut self, dir: &Path) -> Self {
+        self.slots = SlotCache::open(dir);
+        self.log = TxLog::open(dir, &self.me());
+        self
     }
 
     /// Cluster time, estimated from the last refresh.
@@ -197,6 +249,16 @@ impl<C: Chain> App<C> {
 
     pub fn me(&self) -> Pubkey {
         self.wallet.pubkey()
+    }
+
+    /// Reports a copy: `tool` is the clipboard command that took it, if any.
+    pub fn copied(&mut self, what: &str, tool: Option<&str>) {
+        match tool {
+            Some(tool) => self.done(format!("{what} copied to the clipboard ({tool})")),
+            None => self.done(format!(
+                "{what} sent to the terminal's clipboard (OSC 52); in tmux, Ctrl+b ] pastes it"
+            )),
+        }
     }
 
     /// The door pass on screen, as text.
@@ -212,6 +274,7 @@ impl<C: Chain> App<C> {
     // -----------------------------------------------------------------------
 
     /// Organizers see their own events, scanners the events they scan; minters and buyers all.
+    /// The search box narrows any of them.
     pub fn visible_events(&self) -> Vec<&EventInfo> {
         let me = self.me();
         self.events
@@ -219,9 +282,25 @@ impl<C: Chain> App<C> {
             .filter(|event| match self.tab {
                 Tab::Organizer => event.config.organizer == me,
                 Tab::Scanner => event.config.scanners.contains(&me),
-                Tab::Minter | Tab::Buyer => true,
+                Tab::Minter | Tab::Buyer | Tab::Log => true,
             })
+            .filter(|event| matches_search(event, &self.search))
             .collect()
+    }
+
+    /// This wallet's transactions, newest first, narrowed by the search box.
+    pub fn visible_log(&self) -> Vec<&LogEntry> {
+        let query = self.search.trim().trim_start_matches('#');
+        self.log
+            .entries
+            .iter()
+            .rev()
+            .filter(|entry| query.is_empty() || entry.matches(query))
+            .collect()
+    }
+
+    pub fn selected_log(&self) -> Option<&LogEntry> {
+        self.visible_log().get(self.log_index).copied()
     }
 
     pub fn selected_event(&self) -> Option<&EventInfo> {
@@ -237,7 +316,7 @@ impl<C: Chain> App<C> {
                 Tab::Organizer => true,
                 Tab::Minter => ticket.owner == me,
                 Tab::Buyer => ticket.owner == me || ticket.state.seller.is_some(),
-                Tab::Scanner => false,
+                Tab::Scanner | Tab::Log => false,
             })
             .collect()
     }
@@ -251,6 +330,11 @@ impl<C: Chain> App<C> {
     // -----------------------------------------------------------------------
 
     pub fn on_paste(&mut self, text: &str) {
+        if self.searching {
+            self.search.push_str(text.trim());
+            self.search_changed();
+            return;
+        }
         match &mut self.modal {
             Some(Modal::Form(form)) => form.paste(text),
             None if self.tab == Tab::Scanner => {
@@ -267,10 +351,53 @@ impl<C: Chain> App<C> {
             self.quit = true;
             return;
         }
+        if self.searching {
+            self.on_search_key(key);
+            return;
+        }
         match self.modal.take() {
             Some(modal) => self.on_modal_key(modal, key),
             None => self.on_main_key(key),
         }
+    }
+
+    fn on_search_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Enter => {
+                self.searching = false;
+                self.queue(Job::LoadTickets, "Loading tickets…");
+            }
+            KeyCode::Esc => {
+                self.searching = false;
+                self.search.clear();
+                self.search_changed();
+                self.queue(Job::LoadTickets, "Loading tickets…");
+            }
+            KeyCode::Backspace => {
+                self.search.pop();
+                self.search_changed();
+            }
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.search.clear();
+                self.search_changed();
+            }
+            KeyCode::Char(c) => {
+                self.search.push(c);
+                self.search_changed();
+            }
+            _ => {}
+        }
+    }
+
+    /// The filter changed: start from the top. Tickets reload once the search is done, not
+    /// on every key.
+    fn search_changed(&mut self) {
+        self.event_index = 0;
+        self.ticket_index = 0;
+        self.log_index = 0;
+        self.log_scroll = 0;
+        self.tickets.clear();
+        self.mints = 0;
     }
 
     fn on_modal_key(&mut self, modal: Modal, key: KeyEvent) {
@@ -307,8 +434,7 @@ impl<C: Chain> App<C> {
                     match code {
                         KeyCode::Char('t') => view.as_text = !view.as_text,
                         KeyCode::Char('c') => {
-                            self.clipboard = Some(view.pass.encode());
-                            self.done("Pass copied (if your terminal allows clipboard access)");
+                            self.clipboard = Some(("Pass", view.pass.encode()));
                         }
                         _ => {}
                     }
@@ -323,14 +449,30 @@ impl<C: Chain> App<C> {
         match key.code {
             KeyCode::Char('q') => self.quit = true,
             KeyCode::Char('?') => self.modal = Some(Modal::Help),
+            KeyCode::Char('/') => {
+                self.searching = true;
+                self.info("Search: type an event name (or ID) · Enter keeps it · Esc clears it");
+            }
+            KeyCode::Char('r') if self.tab == Tab::Log => {
+                self.queue(Job::RefreshLog, "Checking confirmations…")
+            }
             KeyCode::Char('r') => self.queue(Job::Refresh, "Refreshing…"),
             KeyCode::Tab => self.switch_tab((self.tab.index() + 1) % Tab::ALL.len()),
             KeyCode::BackTab => {
                 self.switch_tab((self.tab.index() + Tab::ALL.len() - 1) % Tab::ALL.len())
             }
-            KeyCode::Char(c @ '1'..='4') => self.switch_tab(c as usize - '1' as usize),
+            KeyCode::Char(c @ '1'..='5') => self.switch_tab(c as usize - '1' as usize),
             KeyCode::Left => self.pane = Pane::Events,
+            // In the Log, the right pane is the selected transaction's details
             KeyCode::Right if self.tab != Tab::Scanner => self.pane = Pane::Tickets,
+            KeyCode::PageUp if self.tab == Tab::Log => {
+                self.scroll_log(-(self.log_page.get() as isize))
+            }
+            KeyCode::PageDown if self.tab == Tab::Log => {
+                self.scroll_log(self.log_page.get() as isize)
+            }
+            KeyCode::Home if self.tab == Tab::Log => self.log_scroll = 0,
+            KeyCode::End if self.tab == Tab::Log => self.log_scroll = self.log_scroll_max.get(),
             KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),
             KeyCode::Down | KeyCode::Char('j') => self.move_selection(1),
             _ => self.on_action_key(key.code),
@@ -361,8 +503,12 @@ impl<C: Chain> App<C> {
             },
 
             // Minter
-            (Tab::Minter, KeyCode::Char('m')) => match event {
-                Some(event) => self.queue(Job::Prepare(Request::Mint(event)), "Checking…"),
+            (Tab::Minter, KeyCode::Char('m')) => match self.selected_event() {
+                // Nothing left to mint: let the checks say why
+                Some(event) if actions::mintable(event, self.mints) == 0 => {
+                    self.queue(Job::Prepare(Request::Mint(event.address)), "Checking…")
+                }
+                Some(event) => self.modal = Some(Modal::Form(mint_form(event, self.mints))),
                 None => self.error(need_event),
             },
 
@@ -401,7 +547,23 @@ impl<C: Chain> App<C> {
             (Tab::Scanner, KeyCode::Char('v') | KeyCode::Enter) => {
                 self.modal = Some(Modal::Form(scan_form()))
             }
-            (Tab::Scanner, KeyCode::Esc) => self.report = None,
+            (Tab::Scanner, KeyCode::Esc) if self.report.is_some() => self.report = None,
+
+            // Log
+            (Tab::Log, KeyCode::Char('c')) => {
+                match self.selected_log().and_then(|e| e.signature.clone()) {
+                    Some(signature) => {
+                        self.clipboard = Some(("Signature", signature));
+                    }
+                    None => self.error("This transaction has no signature (it never landed)"),
+                }
+            }
+
+            (_, KeyCode::Esc) if !self.search.is_empty() => {
+                self.search.clear();
+                self.search_changed();
+                self.queue(Job::LoadTickets, "Loading tickets…");
+            }
             _ => {}
         }
     }
@@ -422,6 +584,13 @@ impl<C: Chain> App<C> {
     }
 
     fn move_selection(&mut self, delta: isize) {
+        if self.tab == Tab::Log {
+            match self.pane {
+                Pane::Events => self.move_log_selection(delta),
+                Pane::Tickets => self.scroll_log(delta),
+            }
+            return;
+        }
         let step = |index: usize, len: usize| {
             (index as isize + delta).clamp(0, len.saturating_sub(1) as isize) as usize
         };
@@ -438,6 +607,21 @@ impl<C: Chain> App<C> {
                 self.ticket_index = step(self.ticket_index, self.visible_tickets().len())
             }
         }
+    }
+
+    fn move_log_selection(&mut self, delta: isize) {
+        let len = self.visible_log().len();
+        let next =
+            (self.log_index as isize + delta).clamp(0, len.saturating_sub(1) as isize) as usize;
+        if next != self.log_index {
+            self.log_index = next;
+            self.log_scroll = 0;
+        }
+    }
+
+    fn scroll_log(&mut self, delta: isize) {
+        let max = self.log_scroll_max.get() as isize;
+        self.log_scroll = (self.log_scroll as isize + delta).clamp(0, max) as u16;
     }
 
     fn new_event_form(&self) -> Form {
@@ -539,6 +723,7 @@ impl<C: Chain> App<C> {
         };
         let result = match job {
             Job::Refresh => self.refresh().map(|()| self.info("Up to date")),
+            Job::RefreshLog => self.refresh_log(),
             Job::LoadTickets => self.load_tickets().map(|()| self.info("")),
             Job::Submit(form) => {
                 self.submit(form);
@@ -561,11 +746,114 @@ impl<C: Chain> App<C> {
         self.usdc = model::usdc_balance(&self.chain, &me)?;
         let selected = self.selected_event().map(|e| e.address);
         self.events = model::events(&self.chain, None)?;
+        self.sort_events();
         let events = self.visible_events();
         self.event_index = selected
             .and_then(|address| events.iter().position(|e| e.address == address))
             .unwrap_or(self.event_index.min(events.len().saturating_sub(1)));
         self.load_tickets()
+    }
+
+    /// Sorts events newest first by the slot they were created in, as far as it's known. Unknown
+    /// ones are looked up between key presses ([`Self::run_idle`]) and keep their place last.
+    fn sort_events(&mut self) {
+        let slots = &self.slots;
+        model::sort_newest_first(&mut self.events, |address| slots.get(address));
+        self.ordering = self.next_unknown_slot().is_some();
+    }
+
+    fn next_unknown_slot(&self) -> Option<Pubkey> {
+        self.events
+            .iter()
+            .map(|event| event.address)
+            .find(|address| {
+                self.slots.get(address).is_none() && !self.slot_misses.contains(address)
+            })
+    }
+
+    /// Background work for when no key is pressed: looks up one event's creation slot (a single
+    /// RPC call, so input never waits long) and re-sorts, keeping the selection.
+    pub fn has_idle_work(&self) -> bool {
+        self.ordering && self.pending.is_none()
+    }
+
+    pub fn run_idle(&mut self) {
+        let Some(address) = self.next_unknown_slot() else {
+            self.ordering = false;
+            return;
+        };
+        match self.chain.first_slot(&address) {
+            Ok(Some(slot)) => {
+                self.slots.insert(address, slot);
+                let _ = self.slots.save();
+            }
+            Ok(None) => {
+                self.slot_misses.insert(address);
+            }
+            // Rate limited or offline: keep the order we have; r tries again
+            Err(_) => {
+                self.ordering = false;
+                return;
+            }
+        }
+        let selected = self.selected_event().map(|e| e.address);
+        self.sort_events();
+        if self.event_index == 0 {
+            // Still at the top: follow the top, which is the newest event as far as known
+            if self.selected_event().map(|e| e.address) != selected {
+                self.ticket_index = 0;
+                self.queue(Job::LoadTickets, "Loading tickets…");
+            }
+        } else if let Some(index) = selected.and_then(|address| {
+            self.visible_events()
+                .iter()
+                .position(|e| e.address == address)
+        }) {
+            self.event_index = index;
+        }
+    }
+
+    /// Adds what the cluster recorded to transactions that don't have it yet, and marks
+    /// finalized ones.
+    fn refresh_log(&mut self) -> Result<()> {
+        let me = self.me();
+        let mut changed = false;
+        let unsettled: Vec<usize> = (0..self.log.entries.len())
+            .filter(|&i| self.log.entries[i].unsettled())
+            .collect();
+        let signatures: Vec<Signature> = unsettled
+            .iter()
+            .filter_map(|&i| self.log.entries[i].signature())
+            .collect();
+        let confirmations = self.chain.confirmations(&signatures)?;
+        for (&i, confirmation) in unsettled.iter().zip(confirmations) {
+            let entry = &mut self.log.entries[i];
+            if entry.slot.is_none() {
+                if let Some(signature) = entry.signature() {
+                    if let Some(details) = self.chain.transaction(&signature, &me)? {
+                        entry.add_details(details);
+                        changed = true;
+                    }
+                }
+            }
+            if let Some(confirmation) = confirmation {
+                let before = entry.status;
+                entry.confirm(confirmation);
+                changed |= entry.status != before;
+            }
+        }
+        if changed {
+            self.log.save()?;
+        }
+        let pending = self.log.entries.iter().filter(|e| e.unsettled()).count();
+        if pending == 0 {
+            self.info("Log up to date: every transaction is finalized");
+        } else {
+            self.info(&format!(
+                "{pending} transaction(s) not finalized yet: press r again in a few seconds"
+            ));
+        }
+        Ok(())
     }
 
     fn load_tickets(&mut self) -> Result<()> {
@@ -597,6 +885,9 @@ impl<C: Chain> App<C> {
                 .and_then(|new| actions::prepare_init_event(&self.chain, &self.wallet, new)),
             FormKind::Scanners { event } => format::parse_pubkeys(form.value(0)).and_then(|list| {
                 actions::prepare_update_scanners(&self.chain, &self.wallet, event, list)
+            }),
+            FormKind::Mint { event } => parse_count(form.value(0)).and_then(|count| {
+                actions::prepare_mint_many(&self.chain, &self.wallet, event, count)
             }),
             FormKind::List { asset } => format::parse_usdc(form.value(0))
                 .and_then(|price| actions::prepare_list(&self.chain, &self.wallet, asset, price)),
@@ -707,7 +998,21 @@ impl<C: Chain> App<C> {
     }
 
     fn execute(&mut self, confirm: Confirm) -> Result<()> {
-        let receipt = actions::execute(&mut self.chain, &self.wallet, confirm.plan)?;
+        let me = self.me();
+        let mut entry = LogEntry::new(&confirm.plan, &me, &self.cluster, local_now());
+        let result = actions::execute(&mut self.chain, &self.wallet, confirm.plan);
+        match &result {
+            Ok(receipt) => {
+                entry.landed(&receipt.signature);
+                // Best effort: the Log tab's r fills in what isn't served yet
+                if let Ok(Some(details)) = self.chain.transaction(&receipt.signature, &me) {
+                    entry.add_details(details);
+                }
+            }
+            Err(error) => entry.failed(error, describe(error)),
+        }
+        let logged = self.log.push(entry);
+        let receipt = result?;
         if let After::Scanned { ticket, holder } = confirm.after {
             self.scans.insert(
                 0,
@@ -720,7 +1025,10 @@ impl<C: Chain> App<C> {
             );
             self.report = None;
         }
-        let confirmed = format!("{} confirmed · {}", receipt.title, receipt.signature);
+        let mut confirmed = format!("{} confirmed · {}", receipt.title, receipt.signature);
+        if let Err(error) = logged {
+            confirmed += &format!(" (not saved to the log: {error:#})");
+        }
         // The transaction landed: a failed refresh mustn't hide its signature
         match self.refresh_and_select(receipt.created) {
             Ok(()) => self.done(confirmed),
@@ -770,6 +1078,42 @@ impl<C: Chain> App<C> {
         self.done("Pass ready: show it at the door");
         Ok(())
     }
+}
+
+/// Search on the name (every word, any order), or the event ID (with or without `#`).
+fn matches_search(event: &EventInfo, search: &str) -> bool {
+    let query = search.trim();
+    let id = query.trim_start_matches('#');
+    query.is_empty()
+        || format::matches_words(query, &event.name)
+        || (!id.is_empty() && event.config.event_id.to_string().contains(id))
+}
+
+fn parse_count(input: &str) -> Result<u8> {
+    input
+        .parse::<u8>()
+        .ok()
+        .filter(|&count| count >= 1)
+        .ok_or_else(|| anyhow::anyhow!("Tickets: enter a whole number, at least 1"))
+}
+
+fn mint_form(event: &EventInfo, minted: u8) -> Form {
+    let most = actions::mintable(event, minted);
+    let each = event.config.ticket_price + frost_pass::constants::MINT_FEE;
+    Form::new(
+        FormKind::Mint {
+            event: event.address,
+        },
+        format!("Mint · {}", event.name),
+        vec![Field::new(
+            "Tickets",
+            "1",
+            format!(
+                "1–{most} · {} USDC each (price + mint fee) · all in one transaction",
+                format::usdc(each)
+            ),
+        )],
+    )
 }
 
 fn scanners_form(event: &EventInfo) -> Form {

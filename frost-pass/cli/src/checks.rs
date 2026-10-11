@@ -189,6 +189,18 @@ fn not_organizer(event: &EventConfig, wallet: &Pubkey, message: &str) -> Check {
 
 /// `mint_ticket`. `minted_by_wallet` is the minter's `MinterRecord.count`.
 pub fn mint(event: &EventConfig, minter: &Pubkey, minted_by_wallet: u8, now: i64) -> Check {
+    mint_many(event, minter, minted_by_wallet, 1, now)
+}
+
+/// `count` mints in one transaction: the program checks each `mint_ticket` in turn, so the whole
+/// batch must fit under the per-wallet limit and the remaining supply.
+pub fn mint_many(
+    event: &EventConfig,
+    minter: &Pubkey,
+    minted_by_wallet: u8,
+    count: u8,
+    now: i64,
+) -> Check {
     not_organizer(
         event,
         minter,
@@ -209,6 +221,20 @@ pub fn mint(event: &EventConfig, minter: &Pubkey, minted_by_wallet: u8, now: i64
         event.tickets_minted < event.ticket_supply,
         "EventSoldOut",
         "The event is sold out",
+    )?;
+    let wallet_left = MAX_MINTS_PER_WALLET - minted_by_wallet;
+    rule(
+        count <= wallet_left,
+        "MintLimitReached",
+        format!(
+            "You can mint {wallet_left} more (at most {MAX_MINTS_PER_WALLET} per wallet per event)"
+        ),
+    )?;
+    let supply_left = event.ticket_supply - event.tickets_minted;
+    rule(
+        u32::from(count) <= supply_left,
+        "EventSoldOut",
+        format!("Only {supply_left} tickets are left"),
     )
 }
 

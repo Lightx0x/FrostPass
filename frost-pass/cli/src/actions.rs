@@ -40,10 +40,12 @@ pub struct Plan {
     pub new_accounts: Vec<Keypair>,
     /// The main account the action creates, if any.
     pub created: Option<Pubkey>,
+    /// The event the action is about, for the transaction log.
+    pub event_id: Option<u32>,
 }
 
 impl Plan {
-    fn new(title: impl Into<String>) -> Self {
+    pub(crate) fn new(title: impl Into<String>) -> Self {
         Self {
             title: title.into(),
             lines: Vec::new(),
@@ -51,7 +53,17 @@ impl Plan {
             instructions: Vec::new(),
             new_accounts: Vec::new(),
             created: None,
+            event_id: None,
         }
+    }
+
+    /// Names the event on the confirmation screen and records it for the log.
+    fn for_event(mut self, event: &EventInfo) -> Self {
+        self.event_id = Some(event.config.event_id);
+        self.line(
+            "Event",
+            format!("{} · ID {}", event.name, event.config.event_id),
+        )
     }
 
     fn line(mut self, label: impl Into<String>, value: impl Into<String>) -> Self {
@@ -77,6 +89,46 @@ pub fn execute(chain: &mut impl Chain, wallet: &Keypair, plan: Plan) -> Result<R
         created: plan.created,
     })
 }
+
+/// Readable names for a transaction's instructions: `FrostPass: mint_ticket`, `Ed25519: verify`.
+pub fn instruction_names(instructions: &[Instruction]) -> Vec<String> {
+    use anchor_lang::Discriminator;
+    use frost_pass::instruction as ix;
+    let frost_pass: [(&[u8], &str); 10] = [
+        (ix::InitEvent::DISCRIMINATOR, "init_event"),
+        (ix::UpdateScanners::DISCRIMINATOR, "update_scanners"),
+        (ix::MintTicket::DISCRIMINATOR, "mint_ticket"),
+        (ix::ListTicket::DISCRIMINATOR, "list_ticket"),
+        (ix::DelistTicket::DISCRIMINATOR, "delist_ticket"),
+        (ix::BuyTicket::DISCRIMINATOR, "buy_ticket"),
+        (ix::RedeemTicket::DISCRIMINATOR, "redeem_ticket"),
+        (ix::CancelEvent::DISCRIMINATOR, "cancel_event"),
+        (ix::RefundTicket::DISCRIMINATOR, "refund_ticket"),
+        (ix::CloseTicket::DISCRIMINATOR, "close_ticket"),
+    ];
+    instructions
+        .iter()
+        .map(|instruction| {
+            let program = instruction.program_id;
+            if program == frost_pass::ID {
+                let name = frost_pass
+                    .iter()
+                    .find(|(discriminator, _)| instruction.data.starts_with(discriminator))
+                    .map_or("unknown", |(_, name)| name);
+                format!("FrostPass: {name}")
+            } else if program == ED25519_PROGRAM {
+                "Ed25519: verify the door pass signature".into()
+            } else if program == anchor_spl::associated_token::ID {
+                "Associated Token: create USDC account".into()
+            } else {
+                format!("{program}")
+            }
+        })
+        .collect()
+}
+
+/// The native program that verifies ed25519 signatures (the door pass).
+const ED25519_PROGRAM: Pubkey = anchor_lang::pubkey!("Ed25519SigVerify111111111111111111111111111");
 
 fn violation(rule: &'static str, message: impl Into<String>) -> anyhow::Error {
     Violation {
@@ -168,6 +220,7 @@ pub fn prepare_init_event(chain: &impl Chain, organizer: &Keypair, new: NewEvent
             "Collection",
             "Frozen: tickets can only move through FrostPass",
         );
+    plan.event_id = Some(new.event_id);
 
     if model::usdc_balance(chain, &organizer_key)?.is_none() {
         plan.instructions
@@ -228,9 +281,17 @@ pub fn prepare_update_scanners(
             .join(", ")
     };
     let mut plan = Plan::new("Update scanners")
-        .line("Event", &event.name)
+        .for_event(&event)
         .line("Current", list(&event.config.scanners))
         .line("New", list(&scanners));
+    let added: Vec<Pubkey> = scanners
+        .iter()
+        .filter(|s| !event.config.scanners.contains(s))
+        .copied()
+        .collect();
+    if !added.is_empty() {
+        plan = plan.line("Added", list(&added));
+    }
     let removed: Vec<Pubkey> = event
         .config
         .scanners
@@ -252,7 +313,7 @@ pub fn prepare_update_scanners(
 pub fn prepare_cancel(chain: &impl Chain, organizer: &Keypair, event: &Pubkey) -> Result<Plan> {
     let event = model::event(chain, event)?;
     checks::cancel(&event.config, &organizer.pubkey())?;
-    let mut plan = Plan::new("Cancel event").line("Event", &event.name).line(
+    let mut plan = Plan::new("Cancel event").for_event(&event).line(
         "Tickets out",
         format!(
             "{} (refund each at face value)",
@@ -305,6 +366,7 @@ pub fn prepare_refund(chain: &impl Chain, organizer: &Keypair, asset: &Pubkey) -
         &ticket.owner,
         asset,
     ));
+    plan.event_id = Some(event.config.event_id);
     Ok(plan)
 }
 
@@ -313,16 +375,37 @@ pub fn prepare_refund(chain: &impl Chain, organizer: &Keypair, asset: &Pubkey) -
 // ---------------------------------------------------------------------------
 
 pub fn prepare_mint(chain: &impl Chain, minter: &Keypair, event: &Pubkey) -> Result<Plan> {
+    prepare_mint_many(chain, minter, event, 1)
+}
+
+/// How many more tickets `minter` can mint of `event` right now (wallet limit and supply).
+pub fn mintable(event: &EventInfo, minted_by_wallet: u8) -> u8 {
+    let wallet_left = MAX_MINTS_PER_WALLET.saturating_sub(minted_by_wallet);
+    let supply_left = event.tickets_left().min(u32::from(u8::MAX)) as u8;
+    wallet_left.min(supply_left)
+}
+
+/// `count` tickets in one transaction (one `mint_ticket` each), so they all land or none do.
+pub fn prepare_mint_many(
+    chain: &impl Chain,
+    minter: &Keypair,
+    event: &Pubkey,
+    count: u8,
+) -> Result<Plan> {
+    anyhow::ensure!(count >= 1, "mint at least 1 ticket");
     let now = chain.now()?;
     let event = model::event(chain, event)?;
     let minter_key = minter.pubkey();
     let minted = model::mints_by(chain, &event.address, &minter_key)?;
-    checks::mint(&event.config, &minter_key, minted, now)?;
+    checks::mint_many(&event.config, &minter_key, minted, count, now)?;
 
-    let total = event
+    let each = event
         .config
         .ticket_price
         .checked_add(MINT_FEE)
+        .context("price overflow")?;
+    let total = each
+        .checked_mul(u64::from(count))
         .context("price overflow")?;
     checks::usdc_funds(
         model::usdc_balance(chain, &minter_key)?,
@@ -333,41 +416,54 @@ pub fn prepare_mint(chain: &impl Chain, minter: &Keypair, event: &Pubkey) -> Res
     checks::usdc_account(accounts[&event.config.organizer], "The organizer")?;
     checks::usdc_account(accounts[&PROTOCOL_TREASURY], "The protocol treasury")?;
 
-    let asset = Keypair::new();
-    let mut plan = Plan::new("Mint ticket")
-        .line("Event", &event.name)
-        .line(
-            "Ticket",
+    let first = event.config.tickets_minted + 1;
+    let last = event.config.tickets_minted + u32::from(count);
+    let (title, numbers, note) = if count == 1 {
+        (
+            "Mint ticket".to_string(),
+            format!("#{first} of {}", event.config.ticket_supply),
+            "The ticket is frozen in your wallet: it moves only through FrostPass resales",
+        )
+    } else {
+        (
+            format!("Mint {count} tickets"),
+            format!("#{first}–#{last} of {}", event.config.ticket_supply),
+            "The tickets are frozen in your wallet: they move only through FrostPass resales. \
+             One transaction: all of them are minted, or none",
+        )
+    };
+    let per_ticket = |amount: u64, to: &str| {
+        if count == 1 {
+            format!("{} USDC → {to}", format::usdc(amount))
+        } else {
             format!(
-                "#{} of {}",
-                event.config.tickets_minted + 1,
-                event.config.ticket_supply
-            ),
-        )
-        .line(
-            "Price",
-            format!(
-                "{} USDC → organizer",
-                format::usdc(event.config.ticket_price)
-            ),
-        )
-        .line(
-            "Mint fee",
-            format!("{} USDC → protocol", format::usdc(MINT_FEE)),
-        )
+                "{} USDC × {count} = {} USDC → {to}",
+                format::usdc(amount),
+                format::usdc(amount * u64::from(count))
+            )
+        }
+    };
+    let mut plan = Plan::new(title)
+        .for_event(&event)
+        .line(if count == 1 { "Ticket" } else { "Tickets" }, numbers)
+        .line("Price", per_ticket(event.config.ticket_price, "organizer"))
+        .line("Mint fee", per_ticket(MINT_FEE, "protocol"))
         .line("Total", format!("{} USDC", format::usdc(total)))
         .line(
             "Your mints",
-            format!("{} of {MAX_MINTS_PER_WALLET} for this event", minted + 1),
+            format!(
+                "{} of {MAX_MINTS_PER_WALLET} for this event",
+                minted + count
+            ),
         )
-        .line(
-            "Note",
-            "The ticket is frozen in your wallet: it moves only through FrostPass resales",
-        );
-    plan.instructions
-        .push(mint_ticket_ix(&event.event(), &minter_key, &asset.pubkey()));
-    plan.created = Some(asset.pubkey());
-    plan.new_accounts.push(asset);
+        .line("Note", note);
+    for _ in 0..count {
+        let asset = Keypair::new();
+        plan.instructions
+            .push(mint_ticket_ix(&event.event(), &minter_key, &asset.pubkey()));
+        plan.created.get_or_insert(asset.pubkey());
+        plan.new_accounts.push(asset);
+    }
     Ok(plan)
 }
 
@@ -421,11 +517,12 @@ pub fn prepare_list(
     }
     plan.instructions
         .push(list_ticket_ix(&event.event(), &seller_key, asset, price));
+    plan.event_id = Some(event.config.event_id);
     Ok(plan)
 }
 
 pub fn prepare_delist(chain: &impl Chain, seller: &Keypair, asset: &Pubkey) -> Result<Plan> {
-    let (_, ticket) = model::ticket(chain, asset)?;
+    let (event, ticket) = model::ticket(chain, asset)?;
     checks::delist(&ticket.state, &seller.pubkey())?;
     let (label, value) = ticket_line(&ticket);
     let mut plan = Plan::new("Delist ticket").line(label, value).line(
@@ -437,6 +534,7 @@ pub fn prepare_delist(chain: &impl Chain, seller: &Keypair, asset: &Pubkey) -> R
     );
     plan.instructions
         .push(delist_ticket_ix(&seller.pubkey(), asset));
+    plan.event_id = Some(event.config.event_id);
     Ok(plan)
 }
 
@@ -453,6 +551,7 @@ pub fn prepare_close(chain: &impl Chain, user: &Keypair, asset: &Pubkey) -> Resu
         Some("The ticket is burned. Keep it instead if you want it as a keepsake.".into());
     plan.instructions
         .push(close_ticket_ix(&event.event(), &user.pubkey(), asset));
+    plan.event_id = Some(event.config.event_id);
     Ok(plan)
 }
 
@@ -516,7 +615,7 @@ pub fn prepare_buy(
 
     let (label, value) = ticket_line(&ticket);
     let mut plan = Plan::new("Buy ticket")
-        .line("Event", &event.name)
+        .for_event(&event)
         .line(label, value)
         .line("Price", format!("{} USDC", format::usdc(price)))
         .line(
@@ -546,6 +645,7 @@ pub fn prepare_buy(
         asset,
         max_price,
     ));
+    plan.event_id = Some(event.config.event_id);
     Ok(plan)
 }
 
@@ -664,7 +764,7 @@ pub fn prepare_redeem(chain: &impl Chain, scanner: &Keypair, pass: &Pass) -> Res
     let challenge = pass.challenge(&event.address);
     let (label, value) = ticket_line(&ticket);
     let mut plan = Plan::new("Redeem ticket")
-        .line("Event", &event.name)
+        .for_event(&event)
         .line(label, value)
         .line("Holder", pass.user.to_string())
         .line(

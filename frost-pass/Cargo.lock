@@ -1973,6 +1973,8 @@ dependencies = [
  "mpl-core",
  "qrcode",
  "ratatui",
+ "serde",
+ "serde_json",
  "solana-account",
  "solana-account-decoder-client-types",
  "solana-commitment-config",
@@ -1982,6 +1984,7 @@ dependencies = [
  "solana-signature",
  "solana-signer",
  "solana-transaction",
+ "solana-transaction-status-client-types",
 ]
 
 [[package]]

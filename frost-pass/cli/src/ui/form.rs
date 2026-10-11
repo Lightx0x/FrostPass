@@ -8,6 +8,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 pub enum FormKind {
     NewEvent,
     Scanners { event: Pubkey },
+    Mint { event: Pubkey },
     List { asset: Pubkey },
     Buy { asset: Pubkey },
     ScanPass,

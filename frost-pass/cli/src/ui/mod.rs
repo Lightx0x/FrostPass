@@ -1,11 +1,17 @@
-//! The terminal UI: one tab per actor (organizer, minter, buyer, scanner) over the same wallet.
+//! The terminal UI: one tab per actor (organizer, minter, buyer, scanner) over the same wallet,
+//! plus the wallet's transaction log.
 
 mod app;
 mod form;
 mod theme;
 mod view;
 
-use std::{io::stdout, time::Duration};
+use std::{
+    io::{stdout, Write},
+    path::Path,
+    process::{Command, Stdio},
+    time::{Duration, Instant},
+};
 
 use anyhow::Result;
 use ratatui::crossterm::{
@@ -22,10 +28,20 @@ use crate::chain::Chain;
 /// How often the screen redraws without input, for countdowns (door passes, sales end).
 const TICK: Duration = Duration::from_millis(250);
 
-pub fn run(chain: impl Chain, wallet: Keypair, cluster: String) -> Result<()> {
+/// Runs the app; `data_dir` keeps the transaction log and event order between runs.
+pub fn run(
+    chain: impl Chain,
+    wallet: Keypair,
+    cluster: String,
+    data_dir: Option<&Path>,
+) -> Result<()> {
+    let mut app = App::new(chain, wallet, cluster);
+    if let Some(dir) = data_dir {
+        app = app.with_store(dir);
+    }
     let mut terminal = ratatui::init();
     execute!(stdout(), EnableBracketedPaste)?;
-    let result = run_app(&mut terminal, App::new(chain, wallet, cluster));
+    let result = run_app(&mut terminal, app);
     let _ = execute!(stdout(), DisableBracketedPaste);
     ratatui::restore();
     result
@@ -34,10 +50,12 @@ pub fn run(chain: impl Chain, wallet: Keypair, cluster: String) -> Result<()> {
 fn run_app(terminal: &mut ratatui::DefaultTerminal, mut app: App<impl Chain>) -> Result<()> {
     while !app.quit {
         terminal.draw(|frame| view::draw(frame, &app))?;
-        if let Some(text) = app.clipboard.take() {
-            // OSC 52: most modern terminals put this on the system clipboard
+        if let Some((what, text)) = app.clipboard.take() {
+            // OSC 52: most terminals (and tmux) take this; some, like GNOME Terminal, ignore it,
+            // so the desktop's clipboard command gets it too
             print!("\x1b]52;c;{}\x07", base64(text.as_bytes()));
-            std::io::Write::flush(&mut stdout())?;
+            stdout().flush()?;
+            app.copied(what, system_clipboard(&text));
         }
         if app.has_pending() {
             // Network calls block; the busy status is already on screen
@@ -50,9 +68,59 @@ fn run_app(terminal: &mut ratatui::DefaultTerminal, mut app: App<impl Chain>) ->
                 Event::Paste(text) => app.on_paste(&text),
                 _ => {}
             }
+        } else if app.has_idle_work() {
+            app.run_idle();
         }
     }
     Ok(())
+}
+
+/// Copies with the desktop's clipboard command, if there is one: `wl-copy` on Wayland, `xclip`
+/// or `xsel` on X11, `pbcopy` on macOS. Returns the command that took it.
+fn system_clipboard(text: &str) -> Option<&'static str> {
+    let mut commands: Vec<(&'static str, &[&str])> = Vec::new();
+    if cfg!(target_os = "macos") {
+        commands.push(("pbcopy", &[]));
+    }
+    if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+        commands.push(("wl-copy", &[]));
+    }
+    if std::env::var_os("DISPLAY").is_some() {
+        commands.push(("xclip", &["-selection", "clipboard"]));
+        commands.push(("xsel", &["--clipboard", "--input"]));
+    }
+    commands
+        .into_iter()
+        .find(|(command, args)| pipe_to(command, args, text))
+        .map(|(command, _)| command)
+}
+
+/// Runs `command` with `text` on its stdin; true if it took it. Never blocks the UI for long:
+/// xclip and wl-copy fork a background process that keeps serving the clipboard.
+fn pipe_to(command: &str, args: &[&str], text: &str) -> bool {
+    let Ok(mut child) = Command::new(command)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return false;
+    };
+    let written = child
+        .stdin
+        .take()
+        .is_some_and(|mut stdin| stdin.write_all(text.as_bytes()).is_ok());
+    let deadline = Instant::now() + Duration::from_secs(1);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return written && status.success(),
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+            // Still running: it has the text and is serving it
+            Ok(None) => return written,
+            Err(_) => return false,
+        }
+    }
 }
 
 fn base64(bytes: &[u8]) -> String {

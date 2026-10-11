@@ -16,11 +16,13 @@ use frost_pass::{
     constants::{MINT_FEE, PROTOCOL_TREASURY, USDC_MINT},
     ID as FROST_PASS_ID,
 };
+use std::collections::HashMap;
+
 use frost_pass_cli::{
     actions::{self, Plan},
-    chain::{Chain, Filter, TxError},
+    chain::{Chain, Filter, TxDetails, TxError},
     checks::{NewEvent, Violation},
-    model,
+    format, model,
     pass::Pass,
 };
 use frost_pass_client::usdc_ata;
@@ -37,8 +39,16 @@ const SOL: u64 = 1_000_000_000;
 const START: i64 = 1_800_000_000;
 const PRICE: u64 = 10 * USDC;
 
+/// The largest serialized transaction a cluster accepts.
+const PACKET_DATA_SIZE: usize = 1232;
+
 struct SvmChain {
     svm: LiteSVM,
+    /// Transactions sent so far, standing in for slots.
+    sent: u64,
+    /// The "slot" each account first appeared in, for [`Chain::first_slot`].
+    first_seen: HashMap<Pubkey, u64>,
+    details: HashMap<Signature, TxDetails>,
 }
 
 impl Chain for SvmChain {
@@ -71,19 +81,57 @@ impl Chain for SvmChain {
         signers: &[&Keypair],
     ) -> Result<Signature, TxError> {
         self.svm.expire_blockhash();
+        let payer = signers[0].pubkey();
         let transaction = Transaction::new_signed_with_payer(
             instructions,
-            Some(&signers[0].pubkey()),
+            Some(&payer),
             signers,
             self.svm.latest_blockhash(),
         );
-        self.svm
+        // A real cluster drops anything bigger; LiteSVM doesn't check
+        let size = 1 + 64 * transaction.signatures.len() + transaction.message.serialize().len();
+        assert!(size <= PACKET_DATA_SIZE, "transaction is {size} bytes");
+        let keys = transaction.message.account_keys.clone();
+        let (sol_before, usdc_before) = (self.account(&payer).unwrap(), self.usdc(&payer));
+        let meta = self
+            .svm
             .send_transaction(transaction)
-            .map(|meta| meta.signature)
             .map_err(|failed| TxError {
                 message: format!("{:?}", failed.err),
                 logs: failed.meta.logs,
-            })
+            })?;
+        self.sent += 1;
+        for key in keys {
+            if self.account(&key).unwrap().is_some() {
+                self.first_seen.entry(key).or_insert(self.sent);
+            }
+        }
+        let sol_after = self.account(&payer).unwrap().map_or(0, |a| a.lamports);
+        self.details.insert(
+            meta.signature,
+            TxDetails {
+                slot: self.sent,
+                block_time: Some(self.now().unwrap()),
+                fee: 5_000 * signers.len() as u64,
+                compute_units: Some(meta.compute_units_consumed),
+                sol_change: sol_after as i64 - sol_before.map_or(0, |a| a.lamports) as i64,
+                usdc_change: self.usdc(&payer) as i64 - usdc_before as i64,
+                logs: meta.logs,
+            },
+        );
+        Ok(meta.signature)
+    }
+
+    fn transaction(
+        &self,
+        signature: &Signature,
+        _wallet: &Pubkey,
+    ) -> anyhow::Result<Option<TxDetails>> {
+        Ok(self.details.get(signature).cloned())
+    }
+
+    fn first_slot(&self, address: &Pubkey) -> anyhow::Result<Option<u64>> {
+        Ok(self.first_seen.get(address).copied())
     }
 }
 
@@ -109,7 +157,12 @@ impl SvmChain {
             &mut mint,
         )
         .unwrap();
-        let mut chain = Self { svm };
+        let mut chain = Self {
+            svm,
+            sent: 0,
+            first_seen: HashMap::new(),
+            details: HashMap::new(),
+        };
         chain.write_token_account(USDC_MINT, mint);
         chain.set_usdc(&PROTOCOL_TREASURY, 0);
         chain.set_time(START);
@@ -405,10 +458,18 @@ fn organizer_rules_and_scanner_revocation() {
         )),
         "DuplicateScanner"
     );
-    chain.run(
-        &organizer,
-        actions::prepare_update_scanners(&chain, &organizer, &event, vec![new_scanner.pubkey()]),
-    );
+    let plan =
+        actions::prepare_update_scanners(&chain, &organizer, &event, vec![new_scanner.pubkey()])
+            .unwrap();
+    let line = |label: &str| {
+        plan.lines
+            .iter()
+            .find(|(l, _)| l == label)
+            .map(|(_, v)| v.clone())
+    };
+    assert_eq!(line("Added"), Some(format::short(&new_scanner.pubkey())));
+    assert_eq!(line("Revoked"), Some(format::short(&old_scanner.pubkey())));
+    chain.run(&organizer, Ok(plan));
 
     let ticket = chain
         .run(&holder, actions::prepare_mint(&chain, &holder, &event))
@@ -503,6 +564,75 @@ fn cancelled_event_refunds_and_ended_event_closes() {
     );
 }
 
+/// Several tickets mint in one transaction, all or nothing, within the wallet limit and the
+/// supply.
+#[test]
+fn several_tickets_mint_in_one_transaction() {
+    let mut chain = SvmChain::new();
+    let organizer = chain.wallet(Some(0));
+    let minter = chain.wallet(Some(100 * USDC));
+    let event = chain
+        .run(
+            &organizer,
+            actions::prepare_init_event(&chain, &organizer, new_event(1, vec![organizer.pubkey()])),
+        )
+        .created
+        .unwrap();
+
+    assert_eq!(
+        blocked(actions::prepare_mint_many(&chain, &minter, &event, 4)),
+        "MintLimitReached"
+    );
+    assert!(actions::prepare_mint_many(&chain, &minter, &event, 0).is_err());
+
+    let plan = actions::prepare_mint_many(&chain, &minter, &event, 3).unwrap();
+    assert_eq!(plan.title, "Mint 3 tickets");
+    assert_eq!(plan.instructions.len(), 3);
+    chain.run(&minter, Ok(plan));
+    let info = model::event(&chain, &event).unwrap();
+    let mine: Vec<_> = model::event_tickets(&chain, &info)
+        .unwrap()
+        .into_iter()
+        .filter(|t| t.owner == minter.pubkey())
+        .collect();
+    assert_eq!(mine.len(), 3);
+    assert_eq!(
+        chain.usdc(&minter.pubkey()),
+        100 * USDC - 3 * (PRICE + MINT_FEE)
+    );
+    assert_eq!(chain.usdc(&organizer.pubkey()), 3 * PRICE);
+    assert_eq!(
+        blocked(actions::prepare_mint(&chain, &minter, &event)),
+        "MintLimitReached"
+    );
+
+    // Two tickets left: three is too many, even for a fresh wallet
+    let small = chain
+        .run(
+            &organizer,
+            actions::prepare_init_event(
+                &chain,
+                &organizer,
+                NewEvent {
+                    ticket_supply: 2,
+                    ..new_event(2, vec![organizer.pubkey()])
+                },
+            ),
+        )
+        .created
+        .unwrap();
+    let fresh = chain.wallet(Some(100 * USDC));
+    assert_eq!(
+        blocked(actions::prepare_mint_many(&chain, &fresh, &small, 3)),
+        "EventSoldOut"
+    );
+    chain.run(
+        &fresh,
+        actions::prepare_mint_many(&chain, &fresh, &small, 2),
+    );
+    assert_eq!(model::event(&chain, &small).unwrap().tickets_left(), 0);
+}
+
 /// The app itself, driven by keys and a paste like a person would: each actor's tab renders,
 /// a holder shows a door pass, and the scanner pastes it and redeems it with two key presses.
 #[test]
@@ -518,6 +648,18 @@ fn the_app_walks_one_wallet_through_every_tab() {
     // The app's wallet mints, holds and scans; the organizer is another wallet
     let organizer = chain.wallet(Some(0));
     let wallet = chain.wallet(Some(100 * USDC));
+    // An older event, created first: the newer one lists above it
+    chain.run(
+        &organizer,
+        actions::prepare_init_event(
+            &chain,
+            &organizer,
+            NewEvent {
+                name: "Older Event".into(),
+                ..new_event(8, vec![organizer.pubkey()])
+            },
+        ),
+    );
     let event = chain
         .run(
             &organizer,
@@ -533,8 +675,12 @@ fn the_app_walks_one_wallet_through_every_tab() {
     let mut app = App::new(chain, wallet, "litesvm".into());
     let mut terminal = Terminal::new(TestBackend::new(120, 42)).unwrap();
     let mut screen = |app: &mut App<SvmChain>| {
-        while app.has_pending() {
-            app.run_pending();
+        while app.has_pending() || app.has_idle_work() {
+            if app.has_pending() {
+                app.run_pending();
+            } else {
+                app.run_idle();
+            }
         }
         terminal.draw(|frame| draw(frame, app)).unwrap();
         let buffer = terminal.backend().buffer();
@@ -554,16 +700,100 @@ fn the_app_walks_one_wallet_through_every_tab() {
     assert!(minter.contains("Coldplay Devnet Tour"));
     assert!(minter.contains("Your tickets (1)"));
     assert!(minter.contains("you've minted 1 of 3"));
+    assert!(
+        minter.find("Coldplay Devnet Tour") < minter.find("Older Event"),
+        "the newest event comes first\n{minter}"
+    );
+
+    // Search by event ID narrows the list; Esc brings everything back
+    press(&mut app, KeyCode::Char('/'));
+    press(&mut app, KeyCode::Char('z'));
+    assert!(screen(&mut app).contains("No events match"));
+    press(&mut app, KeyCode::Backspace);
+    press(&mut app, KeyCode::Char('9'));
+    press(&mut app, KeyCode::Enter);
+    let found = screen(&mut app);
+    assert!(
+        found.contains("search: 9") && !found.contains("Older Event"),
+        "{found}"
+    );
+    assert!(found.contains("Your tickets (1)"), "{found}");
+    press(&mut app, KeyCode::Esc);
+    assert!(screen(&mut app).contains("Older Event"));
+    // By name, the way people search: every word, any order, any case
+    press(&mut app, KeyCode::Char('/'));
+    for c in "tour COLDPLAY".chars() {
+        press(&mut app, KeyCode::Char(c));
+    }
+    press(&mut app, KeyCode::Enter);
+    let by_name = screen(&mut app);
+    assert!(
+        by_name.contains("Your tickets (1)") && !by_name.contains("Older Event"),
+        "{by_name}"
+    );
+    press(&mut app, KeyCode::Esc);
+    assert!(screen(&mut app).contains("Older Event"));
+
+    // Mint two more in one go; then the wallet is at its limit
+    press(&mut app, KeyCode::Char('m'));
+    let form = screen(&mut app);
+    assert!(
+        form.contains("Mint · Coldplay Devnet Tour") && form.contains("1–2"),
+        "{form}"
+    );
+    press(&mut app, KeyCode::Backspace);
+    press(&mut app, KeyCode::Char('2'));
+    press(&mut app, KeyCode::Enter);
+    assert!(screen(&mut app).contains("Mint 2 tickets"));
+    press(&mut app, KeyCode::Char('y'));
+    let minted = screen(&mut app);
+    assert!(minted.contains("Your tickets (3)"), "{minted}");
+    press(&mut app, KeyCode::Char('m'));
+    assert!(screen(&mut app).contains("[MintLimitReached]"));
+
+    // The log has the transaction, with what the cluster recorded
+    press(&mut app, KeyCode::Char('5'));
+    let log = screen(&mut app);
+    assert!(
+        log.contains("Transactions (1)") && log.contains("FrostPass: mint_ticket"),
+        "{log}"
+    );
+    let entry = &app.log.entries[0];
+    assert_eq!(entry.action, "Mint 2 tickets");
+    assert_eq!(entry.event_id, Some(9));
+    assert_eq!(entry.instructions, vec!["FrostPass: mint_ticket"; 2]);
+    assert!(entry.slot.is_some() && entry.compute_units.is_some());
+    assert_eq!(entry.usdc_change, Some(-2 * (PRICE + MINT_FEE) as i64));
+    // The details scroll: the last program log line is reachable
+    assert!(log.contains("→ to scroll"), "{log}");
+    press(&mut app, KeyCode::Right);
+    press(&mut app, KeyCode::End);
+    let bottom = screen(&mut app);
+    let last_log = app.log.entries[0].logs.last().unwrap().clone();
+    assert!(bottom.contains(&last_log), "{bottom}");
+    press(&mut app, KeyCode::Home);
+    assert!(screen(&mut app).contains("Status"));
+    press(&mut app, KeyCode::Left);
+    press(&mut app, KeyCode::Char('/'));
+    press(&mut app, KeyCode::Char('8'));
+    assert!(screen(&mut app).contains("No transactions match"));
+    press(&mut app, KeyCode::Esc);
 
     press(&mut app, KeyCode::Char('1'));
     let organizer_tab = screen(&mut app);
     assert!(organizer_tab.contains("Your events") && organizer_tab.contains("No events yet"));
     press(&mut app, KeyCode::Char('n'));
     assert!(screen(&mut app).contains("Create event"));
+    // A value that wraps over several rows keeps the key hints in view
+    for _ in 0..200 {
+        press(&mut app, KeyCode::Char('x'));
+    }
+    let long_form = screen(&mut app);
+    assert!(long_form.contains("Esc cancel"), "{long_form}");
     press(&mut app, KeyCode::Esc);
 
     press(&mut app, KeyCode::Char('3'));
-    assert!(screen(&mut app).contains("Listings and your tickets (1)"));
+    assert!(screen(&mut app).contains("Listings and your tickets (3)"));
 
     // The holder's door pass
     press(&mut app, KeyCode::Char('2'));
@@ -572,6 +802,14 @@ fn the_app_walks_one_wallet_through_every_tab() {
     assert!(
         pass_screen.contains("Door pass") && pass_screen.contains("▀"),
         "the QR code fits"
+    );
+    assert!(pass_screen.contains("Esc close"), "{pass_screen}");
+    // The text form wraps over several rows; the key hints stay in view
+    press(&mut app, KeyCode::Char('t'));
+    let pass_text = screen(&mut app);
+    assert!(
+        pass_text.contains("FROSTPASS:1:") && pass_text.contains("Esc close"),
+        "{pass_text}"
     );
     let pass = app.shown_pass().unwrap();
     press(&mut app, KeyCode::Esc);

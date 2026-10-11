@@ -183,6 +183,15 @@ pub fn events(chain: &impl Chain, organizer: Option<&Pubkey>) -> Result<Vec<Even
     Ok(events)
 }
 
+/// Newest first by the slot each event was created in. The sort is stable and events with no
+/// known slot go last, so they keep the order [`events`] gave them.
+pub fn sort_newest_first(events: &mut [EventInfo], slot: impl Fn(&Pubkey) -> Option<u64>) {
+    events.sort_by_key(|event| {
+        let slot = slot(&event.address);
+        (slot.is_none(), std::cmp::Reverse(slot))
+    });
+}
+
 /// Adds each event's name and URI from its collection.
 fn with_names(chain: &impl Chain, configs: Vec<(Pubkey, EventConfig)>) -> Result<Vec<EventInfo>> {
     let collections: Vec<Pubkey> = configs.iter().map(|(_, c)| c.collection).collect();

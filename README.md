@@ -122,7 +122,7 @@ The complete instruction suite was executed against the deployed program on devn
 | 7 | `redeem_ticket` | Scanner verifies Ed25519 QR challenge & burns ticket | [`5W6VWzFj…`](https://explorer.solana.com/tx/5W6VWzFjo3ev5NkYKc3u7BHsaq32S12gkrDHEPDyNiWJw3qFZb6M523opbDfTxLsWa2ToVZ13f8KXpWY2jqGSdrB?cluster=devnet) |
 | 8 | `cancel_event` | Organizer cancels event | [`2ToYc2i5…`](https://explorer.solana.com/tx/2ToYc2i5NLGYCWXdG8Hvbc1Rg4CUy6mc4pWyNThBwHY2fP8uRXMii1Zhm5PBfLVkPFAuseL6CZ6qgesUnLAXdx4w?cluster=devnet) |
 | 9 | `refund_ticket` | Organizer refunds face value to holder & burns ticket | [`2L3pbRrS…`](https://explorer.solana.com/tx/2L3pbRrSfZZfXutbd7XSrJ2Y9G3bjCB3yh8LF1EeNoUSxH1nQYgZYeuf3pPY6KbHyN3Ygj2Dk46wK7zvxTGbzSKE?cluster=devnet) |
-| 10 | `close_ticket` | Not run on devnet (events last at least 1 hour); on-chain constraint `EventNotEnded` (error 6034) verified against live event; covered by LiteSVM test `close_ticket_only_by_owner_after_event_end`. | — |
+| 10 | `close_ticket` | Not run on devnet (an event must last at least 1 hour). Calling it before `event_end` is rejected by the deployed program with `EventNotEnded` (6034), checked in simulation. Full behaviour covered by the LiteSVM test `close_ticket_only_by_owner_after_event_end`. | — |
 
 Organizer: `FZFZLbrBExacfhFE6K9uUKjvxT1HEuvtsqXTP9pMkvRb`, Buyer 1: `FghbVFevSqdfd3oijaDJxY3erEUCjmdAfh5xq9BfZGpL`, Buyer 2: `HN6CJtEcsoCauxfYukpMGTHxzBshyL5KHS4ZGfC5ezY5`, Scanner: `GJ2QqZ1guNBoKc2REFQK18NSjXuNvod5Fbh2J8P8ZPrZ`.
 

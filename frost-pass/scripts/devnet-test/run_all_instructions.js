@@ -165,7 +165,7 @@ async function main() {
   // (init_event, update_scanners, mint_ticket, list_ticket, delist_ticket, buy_ticket, redeem_ticket)
   // =========================================================================
   console.log('\n========================================================');
-  console.log('FLOW 1: Primary Sale, Resale, and Gatekeeper Redemption');
+  console.log('FLOW 1: Primary Sale, Resale, and Scanner Redemption');
   console.log('========================================================');
 
   const event1Id = Math.floor(Math.random() * 80000) + 10000;
@@ -483,38 +483,6 @@ async function main() {
   console.log('FLOW 3: Post-Event Expiry & Rent Reclamation (close_ticket)');
   console.log('========================================================');
 
-  // Handle standalone --close mode if executed with: node run_all_instructions.js --close <eventId> <ticketAssetPubkey>
-  const args = process.argv.slice(2);
-  if (args.includes('--close')) {
-    const closeIdx = args.indexOf('--close');
-    const targetEventId = parseInt(args[closeIdx + 1], 10);
-    const targetAssetStr = args[closeIdx + 2];
-    if (!targetEventId || !targetAssetStr) {
-      throw new Error('Usage: node run_all_instructions.js --close <eventId> <ticketAssetPubkey>');
-    }
-    const targetAssetPubkey = new PublicKey(targetAssetStr);
-    const [targetEventPda] = getEventConfigPda(organizer.publicKey, targetEventId);
-    const targetEventAcc = await program.account.eventConfig.fetch(targetEventPda);
-    const [targetStatePda] = getTicketStatePda(targetAssetPubkey);
-
-    console.log(`Executing post-expiry 'close_ticket' on Event #${targetEventId}, Asset: ${targetAssetStr}...`);
-    const closeTx = await buyer1Program.methods
-      .closeTicket()
-      .accounts({
-        user: buyer1.publicKey,
-        eventConfig: targetEventPda,
-        collection: targetEventAcc.collection,
-        ticketAsset: targetAssetPubkey,
-        ticketState: targetStatePda,
-        mplCoreProgram: MPL_CORE_PROGRAM_ID,
-        systemProgram: SystemProgram.programId,
-      })
-      .signers([buyer1])
-      .rpc();
-    console.log(`✓ close_ticket SUCCESS! Ticket burned & rent reclaimed after event end. Tx: ${closeTx}`);
-    return;
-  }
-
   // Create dedicated Event 3 and mint an unburned Ticket 3 held by Buyer 1
   console.log(`\nInitializing Event 3 for 'close_ticket' lifecycle verification...`);
   const event3Id = Math.floor(Math.random() * 80000) + 10000;
@@ -578,6 +546,7 @@ async function main() {
   console.log(`✓ Active Ticket 3 minted for Event #${event3Id} (Asset: ${ticketAsset3.publicKey.toBase58()})`);
 
   console.log(`\n[10/10] Testing 'close_ticket' on active event (verifying EventNotEnded constraint)...`);
+  let rejected = false;
   try {
     await buyer1Program.methods
       .closeTicket()
@@ -592,19 +561,17 @@ async function main() {
       })
       .signers([buyer1])
       .rpc();
-
-    throw new Error('Expected close_ticket to fail with EventNotEnded (6034), but it succeeded unexpectedly!');
   } catch (err) {
-    const errMsg = err.message || err.toString();
-    const isEventNotEnded = errMsg.includes('EventNotEnded') || errMsg.includes('6034');
-    if (isEventNotEnded) {
-      console.log(`✓ close_ticket constraint properly rejected with EventNotEnded (Error 6034)!`);
-      console.log(`  Verified on-chain rule: active tickets cannot be closed before event_end (${eventEnd3.toString()}).`);
-      console.log(`  (To execute successful post-event burn after 1 hour, run: node run_all_instructions.js --close ${event3Id} ${ticketAsset3.publicKey.toBase58()})`);
-    } else {
-      throw new Error(`close_ticket failed with unexpected error (expected EventNotEnded/6034): ${errMsg}`);
+    const msg = err.message || err.toString();
+    if (!msg.includes('EventNotEnded') && !msg.includes('6034')) {
+      throw new Error(`close_ticket failed with unexpected error (expected EventNotEnded/6034): ${msg}`);
     }
+    rejected = true;
   }
+  if (!rejected) {
+    throw new Error('Expected close_ticket to fail with EventNotEnded (6034), but it succeeded');
+  }
+  console.log('✓ close_ticket rejected with EventNotEnded (6034) before event_end');
 
   console.log('\n=================================================================================');
   console.log('  DEVNET INSTRUCTION SUITE COMPLETED (9 instructions finalized, 1 lifecycle gate verified)  ');

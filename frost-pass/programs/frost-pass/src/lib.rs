@@ -17,7 +17,6 @@ pub mod frost_pass {
     use super::*;
 
     #[allow(clippy::too_many_arguments)]
-
     pub fn init_event(
         ctx: Context<InitEvent>,
         event_id: u32,

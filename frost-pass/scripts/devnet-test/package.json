@@ -1,0 +1,19 @@
+{
+  "name": "frost-pass-devnet-test",
+  "version": "1.0.0",
+  "description": "End-to-end devnet test runner for FrostPass Anchor instructions",
+  "main": "run_all_instructions.js",
+  "scripts": {
+    "start": "node run_all_instructions.js",
+    "test": "node run_all_instructions.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@coral-xyz/anchor": "^0.32.1",
+    "@solana/spl-token": "^0.4.15",
+    "@solana/web3.js": "^1.99.0"
+  }
+}

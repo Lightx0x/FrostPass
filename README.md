@@ -109,16 +109,37 @@ All 15 pass:
 
 ### Devnet run
 
-The same flows run against the deployed program on devnet (2026-10-10, event id 43236):
+The complete instruction suite was executed against the deployed program on devnet (2026-10-11):
 
-| Step | Instruction                                                                                                                          | Transaction                                                                                                                                           |
-| ---- | ------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1    | `init_event`                                                                                                                         | [`3LKVKXqG…`](https://explorer.solana.com/tx/3LKVKXqGedP7QzZCPWow8CZYX9ixXDAxU7BFSDAriPbTG3WYBMLjHtVh5PnJtxR2EdRTavFiS62VtWfghmZyxQau?cluster=devnet) |
-| 2    | `mint_ticket` (asset [`FM4Dzxgn…`](https://explorer.solana.com/address/FM4DzxgnKxC3PhH6XsizsTpmNQqrn7zUFC7d4v849BQL?cluster=devnet)) | [`AwGtQhx3…`](https://explorer.solana.com/tx/AwGtQhx3ThgX1v1fBLe5M3vZYCf7hukRE7uh5pWYNHdawGybDiihFpXXCLadLv93nokdHQingHVUbB8htSvXnQQ?cluster=devnet)  |
-| 3    | `list_ticket` at 1.05 USDC                                                                                                           | [`5SU4psNq…`](https://explorer.solana.com/tx/5SU4psNqGBmz1kGZoGixnvQNQfnVWVRiYqmbtxuzDuFUWZRTM5W8qHPHcXqt9jFcGtoWZfJEfR3RZbdPYasBMDMJ?cluster=devnet) |
-| 4    | `delist_ticket`                                                                                                                      | [`4aGsgtXp…`](https://explorer.solana.com/tx/4aGsgtXpgVf4d3Q5GZxSUZxJeKRWQsYmYh8z3qRk1vrpNugSYaYcWDgRejWXVs1NokQY9LkmecNbEozoomjcuhkZ?cluster=devnet) |
+| Step | Instruction | Description | Transaction |
+| ---- | ----------- | ----------- | ----------- |
+| 1 | `init_event` | Organizer creates event & frozen collection | [`2Nc5cftu…`](https://explorer.solana.com/tx/2Nc5cftuBcDGHF8w54DUuHp9BLM8ABkBf37j2rqtmDtVwx68CfgHrfCwb4yzmPsiRevGajCVP36eisa8U2Mp2Zhe?cluster=devnet) |
+| 2 | `update_scanners` | Organizer whitelists door scanners | [`2b2nhv6G…`](https://explorer.solana.com/tx/2b2nhv6Gugs4uCJky4tWgh4dHpLTzneWH9kuFFCi5HDZ8DpC3ZXBvFBh8BA7r9xe3SQb3UCv7Pp7oK4s8V2WqWxH?cluster=devnet) |
+| 3 | `mint_ticket` | Buyer 1 mints ticket (asset [`9S6UwjZs…`](https://explorer.solana.com/address/9S6UwjZskCHSW7mVdwb6MWa1878sZYd721MbFKf1r2sG?cluster=devnet)) | [`NHqe9cHr…`](https://explorer.solana.com/tx/NHqe9cHrWjvP9PeRSuyc2R73iG5uC42spcC6wJhwdCa2eUUF48iVBmFGmNNnn6iqhFQT9cN4nLCChf5JT6vk3aT?cluster=devnet) |
+| 4 | `list_ticket` | Buyer 1 lists ticket within markup cap | [`3pTuGPfC…`](https://explorer.solana.com/tx/3pTuGPfC1Csjy3Q5heXX5W1ijcKUSK2jiXvXEJbFLNipcujKk82UCF5T58L7pX2NEaRHfLXZfcdYBkxRRwHBSyzx?cluster=devnet) |
+| 5 | `delist_ticket` | Buyer 1 delists ticket | [`3z3HGkxq…`](https://explorer.solana.com/tx/3z3HGkxqoYhs4hHnuxqxQPdyNwPj1C271reJN2EeW94ZyUhJJramRWQ4TDaQTCrRnu52p2rYssiu6S77rkNMKEfp?cluster=devnet) |
+| 6 | `buy_ticket` | Buyer 2 purchases ticket on secondary market | [`jc8NNFEX…`](https://explorer.solana.com/tx/jc8NNFEXGzQwT9PYeNCy8GtJH8PZT7HWzBBtoWv2ziAfzusnwBKP7Cz7egk4o5sSvgGZn5jBXmQAgXmwRePm7uF?cluster=devnet) |
+| 7 | `redeem_ticket` | Scanner verifies Ed25519 QR challenge & burns ticket | [`5W6VWzFj…`](https://explorer.solana.com/tx/5W6VWzFjo3ev5NkYKc3u7BHsaq32S12gkrDHEPDyNiWJw3qFZb6M523opbDfTxLsWa2ToVZ13f8KXpWY2jqGSdrB?cluster=devnet) |
+| 8 | `cancel_event` | Organizer cancels event | [`2ToYc2i5…`](https://explorer.solana.com/tx/2ToYc2i5NLGYCWXdG8Hvbc1Rg4CUy6mc4pWyNThBwHY2fP8uRXMii1Zhm5PBfLVkPFAuseL6CZ6qgesUnLAXdx4w?cluster=devnet) |
+| 9 | `refund_ticket` | Organizer refunds face value to holder & burns ticket | [`2L3pbRrS…`](https://explorer.solana.com/tx/2L3pbRrSfZZfXutbd7XSrJ2Y9G3bjCB3yh8LF1EeNoUSxH1nQYgZYeuf3pPY6KbHyN3Ygj2Dk46wK7zvxTGbzSKE?cluster=devnet) |
+| 10 | `close_ticket` | Not run on devnet (an event must last at least 1 hour). Calling it before `event_end` is rejected by the deployed program with `EventNotEnded` (6034), checked in simulation. Full behaviour covered by the LiteSVM test `close_ticket_only_by_owner_after_event_end`. | — |
 
-Organizer `FZFZLbrBExacfhFE6K9uUKjvxT1HEuvtsqXTP9pMkvRb`, buyer `EtbQRaR2ECkxdB3xS53JEaq5gNaRgJEG8PvE7takZk15`.
+Organizer: `FZFZLbrBExacfhFE6K9uUKjvxT1HEuvtsqXTP9pMkvRb`, Buyer 1: `FghbVFevSqdfd3oijaDJxY3erEUCjmdAfh5xq9BfZGpL`, Buyer 2: `HN6CJtEcsoCauxfYukpMGTHxzBshyL5KHS4ZGfC5ezY5`, Scanner: `GJ2QqZ1guNBoKc2REFQK18NSjXuNvod5Fbh2J8P8ZPrZ`.
+
+To rerun the devnet test suite:
+```bash
+cd frost-pass
+anchor build --arch v0
+cd scripts/devnet-test
+npm install
+
+# Run with standard Solana CLI wallet (~/.config/solana/id.json):
+npm start
+
+# Or run with a custom wallet:
+ANCHOR_WALLET=/path/to/wallet.json npm start
+```
+*(The organizer wallet must be on Devnet with Devnet SOL for transaction fees and ~1 Devnet USDC).*
 
 ## Build and test
 

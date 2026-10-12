@@ -207,6 +207,7 @@ Organizer: `n`, Name `QA Main`, price `1`, supply `10`, cap `10`, royalty `5`, S
 Form validation (before the real submit, each should show the error inside the form, nothing sent):
 - [ ] Royalty `6` → `[ExceedsMaxAllowedRoyalty]`; cap `21` → `[ExceedsMaxAllowedMarkup]`.
 - [ ] Sales end later than event end → `[InvalidSalesEnd]`; Event ends `+30m` → `[EventDurationTooShort]`.
+- [ ] Event ends exactly an hour away as a clock time (e.g. now + 1h, `YYYY-MM-DD HH:MM`) → refused before sending with "… at least 1 hour after the transaction lands: <time> or later". Event ends `+1h` → passes, even after waiting a few minutes on the confirm screen (it counts from when you confirm).
 - [ ] Same scanner twice → `[DuplicateScanner]`; empty name → `[InvalidNameLength]`.
 - [ ] Reusing an existing event's ID (same organizer) → `[EventIdTaken]`.
 

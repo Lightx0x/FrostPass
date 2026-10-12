@@ -9,8 +9,8 @@ use anchor_spl::{
 };
 use anyhow::{Context, Result};
 use frost_pass::constants::{
-    CHALLENGE_VALIDITY_SECONDS, MAX_MINTS_PER_WALLET, MAX_RESALE, MINT_FEE, PROTOCOL_TREASURY,
-    USDC_MINT,
+    CHALLENGE_VALIDITY_SECONDS, MAX_MINTS_PER_WALLET, MAX_RESALE, MINT_FEE, MIN_EVENT_DURATION,
+    PROTOCOL_TREASURY, USDC_MINT,
 };
 use frost_pass_client::{
     buy_ticket_ix, cancel_event_ix, close_ticket_ix, delist_ticket_ix, init_event_ix,
@@ -153,10 +153,27 @@ fn ticket_line(ticket: &TicketInfo) -> (String, String) {
 // Organizer
 // ---------------------------------------------------------------------------
 
+/// The program measures an event's minimum length from when the transaction runs, which is a
+/// little after the app checks it; an end this close to the minimum is refused here rather than
+/// left to fail on chain. Relative ends (`+1h`) get more than this added, so they always pass.
+pub const LANDING_MARGIN: i64 = 30;
+
 pub fn prepare_init_event(chain: &impl Chain, organizer: &Keypair, new: NewEvent) -> Result<Plan> {
     let now = chain.now()?;
     let organizer_key = organizer.pubkey();
     let collection = Keypair::new();
+    let earliest = now + MIN_EVENT_DURATION + LANDING_MARGIN;
+    if new.event_end < earliest {
+        // Suggest a time that still works after a few minutes on the confirm screen
+        let suggestion = (now + MIN_EVENT_DURATION + 5 * 60 + 59) / 60 * 60;
+        return Err(violation(
+            "EventDurationTooShort",
+            format!(
+                "The event must end at least 1 hour after the transaction lands: {} or later",
+                format::datetime(suggestion)
+            ),
+        ));
+    }
     checks::new_event(&new, &organizer_key, &collection.pubkey(), now)?;
 
     let event = Event::new(&organizer_key, new.event_id, &collection.pubkey());

@@ -115,6 +115,8 @@ pub struct Confirm {
     /// For irreversible actions: the word to type, and what's typed so far.
     pub typed: Option<(&'static str, String)>,
     after: After,
+    /// A new event's form: rebuilt and re-checked when confirmed, so `+1h` counts from then.
+    rebuild: Option<Box<Form>>,
 }
 
 /// Follow-up once a confirmed transaction lands.
@@ -1220,11 +1222,12 @@ impl<C: Chain> App<C> {
         Ok(())
     }
 
-    fn confirm(&mut self, plan: Plan) {
+    fn confirm(&mut self, plan: Plan, rebuild: Option<Box<Form>>) {
         self.modal = Some(Modal::Confirm(Confirm {
             plan,
             typed: None,
             after: After::Nothing,
+            rebuild,
         }));
         self.info("Review and confirm");
     }
@@ -1262,7 +1265,11 @@ impl<C: Chain> App<C> {
             }
         };
         match result {
-            Ok(plan) => self.confirm(plan),
+            Ok(plan) => {
+                let rebuild =
+                    matches!(form.kind, FormKind::NewEvent).then(|| Box::new(form.clone()));
+                self.confirm(plan, rebuild)
+            }
             Err(error) => {
                 form.error = Some(describe(&error));
                 self.modal = Some(Modal::Form(form));
@@ -1290,7 +1297,14 @@ impl<C: Chain> App<C> {
             markup_cap_bps: field(form, 4, format::parse_percent(form.value(4)))?,
             royalty_bps: field(form, 5, format::parse_percent(form.value(5)))?,
             sales_end: field(form, 6, format::parse_time(form.value(6), now))?,
-            event_end: field(form, 7, format::parse_time(form.value(7), now))?,
+            // A relative end gets a minute of headroom, so "+1h" clears the program's 1-hour
+            // minimum, which counts from when the transaction runs
+            event_end: field(form, 7, format::parse_time(form.value(7), now))?
+                + if form.value(7).starts_with('+') {
+                    RELATIVE_END_HEADROOM
+                } else {
+                    0
+                },
             scanners: field(form, 8, format::parse_pubkeys(form.value(8)))?,
             event_id: field(form, 9, number(9))?,
         })
@@ -1347,12 +1361,34 @@ impl<C: Chain> App<C> {
                 (plan, None, after)
             }
         };
-        self.modal = Some(Modal::Confirm(Confirm { plan, typed, after }));
+        self.modal = Some(Modal::Confirm(Confirm {
+            plan,
+            typed,
+            after,
+            rebuild: None,
+        }));
         self.info("Review and confirm");
         Ok(())
     }
 
-    fn execute(&mut self, confirm: Confirm) -> Result<()> {
+    fn execute(&mut self, mut confirm: Confirm) -> Result<()> {
+        // A new event is rebuilt from its form now: relative times count from this moment, and
+        // an end that has become too close is caught before it's sent
+        if let Some(mut form) = confirm.rebuild.take() {
+            self.clock_offset = self.chain.now()? - local_now();
+            match self
+                .parse_new_event(&form)
+                .and_then(|new| actions::prepare_init_event(&self.chain, &self.wallet, new))
+            {
+                Ok(plan) => confirm.plan = plan,
+                Err(error) => {
+                    form.error = Some(describe(&error));
+                    self.modal = Some(Modal::Form(*form));
+                    self.error("Not sent: fix the highlighted problem");
+                    return Ok(());
+                }
+            }
+        }
         let me = self.me();
         let mut entry = LogEntry::new(&confirm.plan, &me, &self.cluster, local_now());
         let result = actions::execute(&mut self.chain, &self.wallet, confirm.plan);
@@ -1440,6 +1476,10 @@ impl<C: Chain> App<C> {
         Ok(())
     }
 }
+
+/// Added to a relative event end (`+1h`): more than [`actions::LANDING_MARGIN`], so a relative
+/// end always passes, however long the confirm screen stays open.
+const RELATIVE_END_HEADROOM: i64 = 60;
 
 /// The number at the end of a ticket's name (`"Gig #3"` → 3).
 fn ticket_number(name: &str) -> Option<u32> {

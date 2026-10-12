@@ -713,6 +713,99 @@ fn several_tickets_mint_in_one_transaction() {
     assert_eq!(model::event(&chain, &small).unwrap().tickets_left(), 0);
 }
 
+/// "An hour from now" works the way people mean it: `+1h` counts from the moment you confirm
+/// (however long the confirm screen stayed open), and an exact time too close to the 1-hour
+/// minimum is refused before sending, with the earliest time that works.
+#[test]
+fn an_event_an_hour_from_now_lands() {
+    use frost_pass_cli::ui::{draw, App};
+    use ratatui::{
+        backend::TestBackend,
+        crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
+        Terminal,
+    };
+
+    let mut chain = SvmChain::new();
+    let organizer = chain.wallet(Some(0));
+
+    // An exact end just over the minimum would fail on chain once the clock moves on
+    let tight = NewEvent {
+        sales_end: START + 600,
+        event_end: START + 3_600 + 10,
+        ..new_event(1, vec![organizer.pubkey()])
+    };
+    let Err(refused) = actions::prepare_init_event(&chain, &organizer, tight) else {
+        panic!("an end 10 s past the minimum should be refused");
+    };
+    let violation = refused.downcast_ref::<Violation>().unwrap();
+    assert_eq!(violation.rule, "EventDurationTooShort");
+    assert!(
+        violation.message.contains("or later"),
+        "{}",
+        violation.message
+    );
+
+    let mut app = App::new(chain, organizer, "litesvm".into()).without_animation();
+    let mut terminal = Terminal::new(TestBackend::new(120, 42)).unwrap();
+    let mut screen = |app: &mut App<SvmChain>| {
+        while app.has_pending() || app.has_idle_work() {
+            if app.has_pending() {
+                app.run_pending();
+            } else {
+                app.run_idle();
+            }
+        }
+        terminal.draw(|frame| draw(frame, app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        buffer
+            .content
+            .chunks(buffer.area.width as usize)
+            .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>() + "\n")
+            .collect::<String>()
+    };
+    let key = |app: &mut App<SvmChain>, code: KeyCode, modifiers: KeyModifiers| {
+        app.on_key(KeyEvent::new(code, modifiers))
+    };
+    let typed = |app: &mut App<SvmChain>, text: &str| {
+        key(app, KeyCode::Char('u'), KeyModifiers::CONTROL);
+        for c in text.chars() {
+            key(app, KeyCode::Char(c), KeyModifiers::NONE);
+        }
+        key(app, KeyCode::Tab, KeyModifiers::NONE);
+    };
+
+    screen(&mut app);
+    key(&mut app, KeyCode::Char('1'), KeyModifiers::NONE);
+    key(&mut app, KeyCode::Char('n'), KeyModifiers::NONE);
+    // Name, URI, price, supply, cap, royalty, sales end, event end
+    for value in [
+        "Last Minute Gig",
+        "https://example.com/gig.json",
+        "1",
+        "10",
+        "10",
+        "5",
+        "+30m",
+        "+1h",
+    ] {
+        typed(&mut app, value);
+    }
+    key(&mut app, KeyCode::Char('s'), KeyModifiers::CONTROL);
+    assert!(screen(&mut app).contains("Create event"));
+
+    // Five minutes on the confirm screen: "+1h" still means an hour from confirming
+    app.chain.set_time(START + 300);
+    key(&mut app, KeyCode::Char('y'), KeyModifiers::NONE);
+    let done = screen(&mut app);
+    assert!(done.contains("Create event confirmed"), "{done}");
+    let event = app
+        .events
+        .iter()
+        .find(|e| e.name == "Last Minute Gig")
+        .unwrap();
+    assert!(event.config.event_end >= START + 300 + 3_600);
+}
+
 /// Buying in the Marketplace takes the listing's price: no price to type, and the confirm
 /// screen shows what's paid. Minting and passes point to the Ticket tab.
 #[test]

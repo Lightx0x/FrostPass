@@ -16,7 +16,7 @@ use ratatui::{
 };
 
 use super::{
-    app::{App, Modal, Pane, StatusKind, Tab, TicketRow},
+    app::{App, Hit, HitTarget, Modal, Pane, StatusKind, Tab, TicketRow},
     form::Form,
     theme,
 };
@@ -39,6 +39,7 @@ pub fn draw<C: Chain>(frame: &mut Frame, app: &App<C>) {
     ])
     .areas(frame.area());
 
+    app.hits.borrow_mut().clear();
     draw_header(frame, header, app);
     draw_tabs(frame, tabs, app);
     let [left, right] =
@@ -118,6 +119,27 @@ fn draw_tabs<C: Chain>(frame: &mut Frame, area: Rect, app: &App<C>) {
         .divider(Span::styled("│", Style::new().fg(theme::BORDER)))
         .padding("", "");
     frame.render_widget(tabs, area);
+    // Each title is clickable: " 1 Create " then a one-column divider
+    let mut x = area.x;
+    for (index, tab) in Tab::ALL.iter().enumerate() {
+        let width = format!(" {} {} ", index + 1, tab.title()).chars().count() as u16;
+        app.hits.borrow_mut().push(pane_hit(
+            HitTarget::Tab(index),
+            Rect::new(x, area.y, width, 1),
+        ));
+        x += width + 1;
+    }
+}
+
+/// A clickable area without rows (a click only focuses it).
+fn pane_hit(target: HitTarget, area: Rect) -> Hit {
+    Hit {
+        target,
+        area,
+        first_row: 0,
+        row_height: 0,
+        offset: 0,
+    }
 }
 
 /// The list's title, with the search box when there is one.
@@ -133,10 +155,13 @@ fn search_title<C: Chain>(title: &str, app: &App<C>) -> String {
 
 fn draw_events<C: Chain>(frame: &mut Frame, area: Rect, app: &App<C>) {
     let focused = app.pane == Pane::Events && app.modal.is_none();
+    app.hits
+        .borrow_mut()
+        .push(pane_hit(HitTarget::Pane(Pane::Events), area));
     let title = match app.tab {
-        Tab::Organizer => "Your events",
+        Tab::Create => "Your events",
         Tab::Scanner => "Events you scan",
-        Tab::Minter | Tab::Buyer | Tab::Log => "Events",
+        Tab::Ticket | Tab::Marketplace | Tab::Log => "Events",
     };
     let events = app.visible_events();
     let title = if app.ordering {
@@ -160,11 +185,11 @@ fn draw_events<C: Chain>(frame: &mut Frame, area: Rect, app: &App<C>) {
     }
     if events.is_empty() {
         let hint = match app.tab {
-            Tab::Organizer => "No events yet.\n\nPress n to create one.",
+            Tab::Create => "No events yet.\n\nPress n to create one.",
             Tab::Scanner => {
-                "You aren't a scanner of any event.\n\nAn organizer adds this wallet with s in their Organizer tab."
+                "You aren't a scanner of any event.\n\nAn organizer adds this wallet with s in their Create tab."
             }
-            Tab::Minter | Tab::Buyer | Tab::Log => "No events on this cluster yet.",
+            Tab::Ticket | Tab::Marketplace | Tab::Log => "No events on this cluster yet.",
         };
         frame.render_widget(
             Paragraph::new(hint)
@@ -220,6 +245,14 @@ fn draw_events<C: Chain>(frame: &mut Frame, area: Rect, app: &App<C>) {
         .highlight_style(theme::selected(focused))
         .highlight_symbol("");
     frame.render_stateful_widget(list, area, &mut state);
+    // Each event takes four rows
+    app.hits.borrow_mut().push(Hit {
+        target: HitTarget::Pane(Pane::Events),
+        area,
+        first_row: area.y + 1,
+        row_height: 4,
+        offset: state.offset(),
+    });
 }
 
 fn event_lines<C: Chain>(event: &EventInfo, app: &App<C>) -> Vec<Line<'static>> {
@@ -294,9 +327,9 @@ fn event_lines<C: Chain>(event: &EventInfo, app: &App<C>) -> Vec<Line<'static>> 
     ];
     let me = app.me();
     let role = match app.tab {
-        Tab::Organizer => format!("organizer · {} tickets out", app.tickets.len()),
-        Tab::Minter => format!("you've minted {} of {MAX_MINTS_PER_WALLET}", app.mints),
-        Tab::Buyer => format!(
+        Tab::Create => format!("organizer · {} tickets out", app.tickets.len()),
+        Tab::Ticket => format!("you've minted {} of {MAX_MINTS_PER_WALLET}", app.mints),
+        Tab::Marketplace => format!(
             "{} listed",
             app.tickets
                 .iter()
@@ -332,19 +365,22 @@ fn draw_event_and_tickets<C: Chain>(frame: &mut Frame, area: Rect, app: &App<C>)
     let focused = app.pane == Pane::Tickets && app.modal.is_none();
     let visible = app.visible_tickets();
     let mut title = match app.tab {
-        Tab::Organizer => format!("All tickets ({})", visible.len()),
-        Tab::Minter => format!("Your tickets ({})", visible.len()),
+        Tab::Create => format!("All tickets ({})", visible.len()),
+        Tab::Ticket => format!("Your tickets ({})", visible.len()),
         _ => format!("Listings and your tickets ({})", visible.len()),
     };
     if app.history_loading() {
         title += " · loading history…";
     }
     let block = block(&title, focused);
+    app.hits
+        .borrow_mut()
+        .push(pane_hit(HitTarget::Pane(Pane::Tickets), tickets));
     if visible.is_empty() {
         let hint = match app.tab {
-            Tab::Organizer => "No tickets minted yet.",
-            Tab::Minter => "You have no tickets for this event.\n\nPress m to mint one.",
-            _ => "Nothing is listed right now, and you hold no tickets here.",
+            Tab::Create => "No tickets minted yet.",
+            Tab::Ticket => "You have no tickets for this event.\n\nPress m to mint one.",
+            _ => "Nothing is listed right now, and you hold no tickets here to sell.",
         };
         frame.render_widget(
             Paragraph::new(hint)
@@ -387,6 +423,17 @@ fn draw_event_and_tickets<C: Chain>(frame: &mut Frame, area: Rect, app: &App<C>)
             ])
         })
         .collect();
+    let tickets = if app.tab == Tab::Create {
+        let [tickets, log] =
+            Layout::vertical([Constraint::Min(6), Constraint::Percentage(40)]).areas(tickets);
+        draw_door_log(frame, log, app);
+        app.hits
+            .borrow_mut()
+            .push(pane_hit(HitTarget::Pane(Pane::Tickets), tickets));
+        tickets
+    } else {
+        tickets
+    };
     let table = Table::new(
         rows,
         [
@@ -406,6 +453,14 @@ fn draw_event_and_tickets<C: Chain>(frame: &mut Frame, area: Rect, app: &App<C>)
     .block(block);
     let mut state = TableState::default().with_selected(Some(app.ticket_index));
     frame.render_stateful_widget(table, tickets, &mut state);
+    // Below the border, the header and its margin
+    app.hits.borrow_mut().push(Hit {
+        target: HitTarget::Pane(Pane::Tickets),
+        area: tickets,
+        first_row: tickets.y + 3,
+        row_height: 1,
+        offset: state.offset(),
+    });
 }
 
 /// `"10-12 07:20"`: a short UTC time for tables.
@@ -446,7 +501,7 @@ fn ticket_status(row: &TicketRow, me: &anchor_lang::prelude::Pubkey) -> (String,
 fn draw_door<C: Chain>(frame: &mut Frame, area: Rect, app: &App<C>) {
     let [verdict, log] =
         Layout::vertical([Constraint::Min(14), Constraint::Percentage(40)]).areas(area);
-    let focused = app.modal.is_none();
+    let focused = app.modal.is_none() && app.pane != Pane::DoorLog;
 
     let mut lines: Vec<Line> = Vec::new();
     match &app.report {
@@ -530,37 +585,70 @@ fn draw_door<C: Chain>(frame: &mut Frame, area: Rect, app: &App<C>) {
             .block(block("Door", focused)),
         verdict,
     );
+    draw_door_log(frame, log, app);
+}
 
-    // The event's door log: every redeem, by every scanner
+/// The selected event's door log: every redeem, by every scanner, newest first. Scanners see it
+/// under the door; organizers under their tickets.
+fn draw_door_log<C: Chain>(frame: &mut Frame, log: Rect, app: &App<C>) {
     let redeems = app.event_redeems();
     let loading = app.history_loading();
+    let focused = app.pane == Pane::DoorLog && app.modal.is_none();
     let me = app.me();
     let who = |key: Option<anchor_lang::prelude::Pubkey>| match key {
         Some(key) if key == me => Span::styled(format!("{:<12}", "you"), theme::accent()),
         Some(key) => Span::styled(format!("{:<12}", format::short(&key)), theme::text()),
         None => Span::styled(format!("{:<12}", "—"), theme::muted()),
     };
-    let mut items: Vec<ListItem> = Vec::new();
+    let mut title = format!(
+        "Door log · {} redeemed ({}) · newest first{}",
+        app.selected_event().map_or("", |e| e.name.as_str()),
+        redeems.len(),
+        if loading { " · loading…" } else { "" }
+    );
+    if !focused && redeems.len() > 1 {
+        title += " · → or click to scroll";
+    }
+    let block = block(&title, focused);
+    let inner = block.inner(log);
+    frame.render_widget(block, log);
+    let mut hit = Hit {
+        target: HitTarget::Pane(Pane::DoorLog),
+        area: log,
+        first_row: 0,
+        row_height: 0,
+        offset: 0,
+    };
     if redeems.is_empty() {
-        items.push(ListItem::new(Line::styled(
-            if loading {
+        frame.render_widget(
+            Paragraph::new(if loading {
                 "Loading the door log…"
             } else if app.selected_event().is_some() {
                 "No tickets redeemed at this event yet."
             } else {
                 "Select an event to see its door log."
-            },
-            theme::muted(),
-        )));
-    } else {
-        items.push(ListItem::new(Line::styled(
+            })
+            .style(theme::muted()),
+            inner,
+        );
+        app.hits.borrow_mut().push(hit);
+        return;
+    }
+    // A fixed header, and the redeems scrolling under it
+    let [header, rows] = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(inner);
+    frame.render_widget(
+        Paragraph::new(Line::styled(
             format!(
                 "{:<13}{:<8}{:<12}{:<12}{}",
                 "Time (UTC)", "Ticket", "Scanner", "Holder", "Signature"
             ),
             theme::muted().add_modifier(Modifier::BOLD),
-        )));
-        items.extend(redeems.iter().map(|redeem| {
+        )),
+        header,
+    );
+    let items: Vec<ListItem> = redeems
+        .iter()
+        .map(|redeem| {
             ListItem::new(Line::from(vec![
                 Span::styled(format!("{:<13}", short_time(redeem.at)), theme::muted()),
                 Span::styled(
@@ -579,15 +667,18 @@ fn draw_door<C: Chain>(frame: &mut Frame, area: Rect, app: &App<C>) {
                     theme::muted(),
                 ),
             ]))
-        }));
-    }
-    let title = format!(
-        "Door log · {} redeemed ({}) · newest first{}",
-        app.selected_event().map_or("", |e| e.name.as_str()),
-        redeems.len(),
-        if loading { " · loading…" } else { "" }
+        })
+        .collect();
+    let mut state = ListState::default().with_selected(Some(app.door_index));
+    frame.render_stateful_widget(
+        List::new(items).highlight_style(theme::selected(focused)),
+        rows,
+        &mut state,
     );
-    frame.render_widget(List::new(items).block(block(&title, false)), log);
+    hit.first_row = rows.y;
+    hit.row_height = 1;
+    hit.offset = state.offset();
+    app.hits.borrow_mut().push(hit);
 }
 
 fn log_status(entry: &LogEntry) -> (&'static str, Style) {
@@ -626,6 +717,10 @@ fn draw_log<C: Chain>(frame: &mut Frame, left: Rect, right: Rect, app: &App<C>) 
     let list_focused = app.pane == Pane::Events && app.modal.is_none();
     let details_focused = app.pane == Pane::Tickets && app.modal.is_none();
     let list_block = block(&title, list_focused);
+    app.hits.borrow_mut().extend([
+        pane_hit(HitTarget::Pane(Pane::Events), left),
+        pane_hit(HitTarget::Pane(Pane::Tickets), right),
+    ]);
     if entries.is_empty() {
         let hint = if app.search.is_empty() {
             match app.log.path() {
@@ -687,6 +782,13 @@ fn draw_log<C: Chain>(frame: &mut Frame, left: Rect, right: Rect, app: &App<C>) 
         left,
         &mut state,
     );
+    app.hits.borrow_mut().push(Hit {
+        target: HitTarget::Pane(Pane::Events),
+        area: left,
+        first_row: left.y + 1,
+        row_height: 4,
+        offset: state.offset(),
+    });
 
     let Some(entry) = app.selected_log() else {
         return;
@@ -842,26 +944,14 @@ fn draw_log<C: Chain>(frame: &mut Frame, left: Rect, right: Rect, app: &App<C>) 
 
 fn draw_keys<C: Chain>(frame: &mut Frame, area: Rect, app: &App<C>) {
     let actions: &[(&str, &str)] = match app.tab {
-        Tab::Organizer => &[
+        Tab::Create => &[
             ("n", "new event"),
             ("s", "scanners"),
             ("c", "cancel event"),
             ("f", "refund"),
         ],
-        Tab::Minter => &[
-            ("m", "mint"),
-            ("l", "list"),
-            ("d", "delist"),
-            ("p", "door pass"),
-            ("x", "close"),
-        ],
-        Tab::Buyer => &[
-            ("b", "buy"),
-            ("l", "list"),
-            ("d", "delist"),
-            ("p", "door pass"),
-            ("x", "close"),
-        ],
+        Tab::Ticket => &[("m", "mint"), ("p", "door pass"), ("x", "close")],
+        Tab::Marketplace => &[("b", "buy"), ("l", "list"), ("d", "delist")],
         Tab::Scanner => &[("v", "scan pass"), ("Enter", "redeem"), ("Esc", "clear")],
         Tab::Log => &[
             ("r", "check confirmations"),
@@ -1220,21 +1310,20 @@ fn draw_help(frame: &mut Frame) {
     };
     let rule = |text: &str| Line::styled(format!("  · {text}"), theme::muted());
     let lines = vec![
-        section("Organizer"),
+        section("Create (tab 1, organizers)"),
         item("n", "Create an event: price, supply, resale cap (≤20%), royalty (≤5%), sales end, event end, scanners"),
         item("s", "Replace the scanner list (1–5 wallets): revoke a lost or compromised scanner"),
         item("c", "Cancel the event (irreversible); then f refunds each holder at face value"),
+        rule("Every ticket and its status, and the door log: who redeemed what, when"),
         Line::raw(""),
-        section("Minter"),
+        section("Ticket (tab 2)"),
         item("m", "Mint 1–3 tickets in one transaction: price to the organizer + 0.25 USDC fee each; 3 per wallet per event"),
-        Line::raw(""),
-        section("Buyer"),
-        item("b", "Buy a listing up to your max price: royalty to the organizer, the rest to the seller"),
-        Line::raw(""),
-        section("Ticket holders (Minter and Buyer tabs)"),
-        item("l / d", "List at 0 up to face value + markup cap / delist. The ticket stays in your wallet"),
         item("p", "Door pass: a QR your wallet signs, valid 60s. Only the current owner can make one"),
         item("x", "Close the ticket after the event ends and get its rent back"),
+        Line::raw(""),
+        section("Marketplace (tab 3)"),
+        item("b", "Buy the selected listing at its price: royalty to the organizer, the rest to the seller"),
+        item("l / d", "List one of your tickets (0 up to face value + resale cap) / delist it. It stays in your wallet"),
         Line::raw(""),
         section("Scanner"),
         item("v", "Paste or scan a pass; Enter redeems it (burns the ticket, rents go to the holder)"),

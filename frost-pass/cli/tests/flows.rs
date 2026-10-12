@@ -713,6 +713,86 @@ fn several_tickets_mint_in_one_transaction() {
     assert_eq!(model::event(&chain, &small).unwrap().tickets_left(), 0);
 }
 
+/// Buying in the Marketplace takes the listing's price: no price to type, and the confirm
+/// screen shows what's paid. Minting and passes point to the Ticket tab.
+#[test]
+fn the_marketplace_buys_at_the_listed_price() {
+    use frost_pass_cli::ui::{draw, App};
+    use ratatui::{
+        backend::TestBackend,
+        crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
+        Terminal,
+    };
+
+    let mut chain = SvmChain::new();
+    let organizer = chain.wallet(Some(0));
+    let seller = chain.wallet(Some(100 * USDC));
+    let buyer = chain.wallet(Some(100 * USDC));
+    let event = chain
+        .run(
+            &organizer,
+            actions::prepare_init_event(&chain, &organizer, new_event(4, vec![organizer.pubkey()])),
+        )
+        .created
+        .unwrap();
+    let ticket = chain
+        .run(&seller, actions::prepare_mint(&chain, &seller, &event))
+        .created
+        .unwrap();
+    let price = PRICE + PRICE / 20;
+    chain.run(
+        &seller,
+        actions::prepare_list(&chain, &seller, &ticket, price),
+    );
+
+    let buyer_key = buyer.pubkey();
+    let mut app = App::new(chain, buyer, "litesvm".into()).without_animation();
+    let mut terminal = Terminal::new(TestBackend::new(120, 42)).unwrap();
+    let mut screen = |app: &mut App<SvmChain>| {
+        while app.has_pending() || app.has_idle_work() {
+            if app.has_pending() {
+                app.run_pending();
+            } else {
+                app.run_idle();
+            }
+        }
+        terminal.draw(|frame| draw(frame, app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        buffer
+            .content
+            .chunks(buffer.area.width as usize)
+            .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>() + "\n")
+            .collect::<String>()
+    };
+    let press = |app: &mut App<SvmChain>, code: KeyCode| {
+        app.on_key(KeyEvent::new(code, KeyModifiers::NONE))
+    };
+
+    press(&mut app, KeyCode::Char('3'));
+    let market = screen(&mut app);
+    assert!(
+        market.contains("Marketplace") && market.contains("Listed · 10.50 USDC"),
+        "{market}"
+    );
+    press(&mut app, KeyCode::Char('m'));
+    assert!(screen(&mut app).contains("in the Ticket tab (2)"));
+
+    press(&mut app, KeyCode::Right);
+    press(&mut app, KeyCode::Char('b'));
+    let confirm = screen(&mut app);
+    assert!(
+        confirm.contains("Buy ticket") && confirm.contains("10.50 USDC"),
+        "straight to the confirm screen, at the listed price\n{confirm}"
+    );
+    press(&mut app, KeyCode::Char('y'));
+    screen(&mut app);
+    assert_eq!(app.chain.usdc(&buyer_key), 100 * USDC - price);
+    assert_eq!(
+        model::ticket(&app.chain, &ticket).unwrap().1.owner,
+        buyer_key
+    );
+}
+
 /// The app itself, driven by keys and a paste like a person would: each actor's tab renders,
 /// a holder shows a door pass, and the scanner pastes it and redeems it with two key presses.
 #[test]
@@ -934,4 +1014,52 @@ fn the_app_walks_one_wallet_through_every_tab() {
         "{all}"
     );
     assert_eq!(all.matches("Held").count(), 2, "{all}");
+    // The organizer sees the door log too, without being a scanner
+    assert!(
+        all.contains("Door log · Coldplay Devnet Tour redeemed (1)"),
+        "{all}"
+    );
+
+    // The door log takes focus: → from the tickets, or a click on one of its rows
+    use frost_pass_cli::ui::{HitTarget, Pane, Tab};
+    use ratatui::crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    let click = |app: &mut App<SvmChain>, column: u16, row: u16| {
+        app.on_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        })
+    };
+    press(&mut organizer_app, KeyCode::Right);
+    press(&mut organizer_app, KeyCode::Right);
+    assert_eq!(organizer_app.pane, Pane::DoorLog);
+    press(&mut organizer_app, KeyCode::Left);
+    assert_eq!(organizer_app.pane, Pane::Tickets);
+    let door_row = organizer_app
+        .hits
+        .borrow()
+        .iter()
+        .find(|hit| hit.target == HitTarget::Pane(Pane::DoorLog) && hit.row_height == 1)
+        .copied()
+        .expect("the door log's rows are clickable");
+    click(&mut organizer_app, door_row.area.x + 2, door_row.first_row);
+    assert_eq!(
+        (organizer_app.pane, organizer_app.door_index),
+        (Pane::DoorLog, 0)
+    );
+    // Tabs switch with a click too
+    let scanner_tab = organizer_app
+        .hits
+        .borrow()
+        .iter()
+        .find(|hit| hit.target == HitTarget::Tab(3))
+        .copied()
+        .unwrap();
+    click(
+        &mut organizer_app,
+        scanner_tab.area.x + 1,
+        scanner_tab.area.y,
+    );
+    assert_eq!(organizer_app.tab, Tab::Scanner);
 }

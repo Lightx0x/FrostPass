@@ -10,7 +10,6 @@ pub enum FormKind {
     Scanners { event: Pubkey },
     Mint { event: Pubkey },
     List { asset: Pubkey },
-    Buy { asset: Pubkey },
     ScanPass,
 }
 

@@ -128,7 +128,7 @@ tmux capture-pane -p -t organizer
 Send keys (examples):
 
 ```bash
-tmux send-keys -t organizer 1          # Organizer tab
+tmux send-keys -t organizer 1          # Create tab
 tmux send-keys -t organizer n          # new-event form
 tmux send-keys -t organizer C-u        # clear the focused field
 tmux send-keys -t organizer -l 'FrostPass QA'   # type literal text
@@ -154,29 +154,29 @@ Clean up at the end: `tmux kill-session -t <name>` for each actor.
 
 ## TUI reference
 
-**Layout:** header (cluster, wallet, SOL, USDC, cluster clock) · tabs `1 Organizer │ 2 Minter │ 3 Buyer │ 4 Scanner │ 5 Log` · left: events, newest first (each shows its ID) · right: event details and tickets (the Door panel on the Scanner tab; the selected transaction on the Log tab) · key hints · status line.
+**Layout:** header (cluster, wallet, SOL, USDC, cluster clock) · tabs `1 Create │ 2 Ticket │ 3 Marketplace │ 4 Scanner │ 5 Log` · left: events, newest first (each shows its ID) · right: event details and tickets (the Door panel on the Scanner tab; the selected transaction on the Log tab) · key hints · status line.
 
 | Keys | Where | Action |
 |---|---|---|
 | `1`–`5`, `Tab`, `Shift+Tab` | everywhere | switch tab |
 | `/` (type, `Enter` keeps, `Esc` clears) | everywhere | search events by name (every word, any order) or ID; in the Log also by action or signature |
-| `←` / `→` | everywhere | left pane / right pane |
+| `←` / `→` | everywhere | move between panes: events → tickets → door log (Create); events → door log (Scanner) |
+| mouse | everywhere | click a tab to switch, click a pane to focus it and a row to select it, wheel to scroll; hold Shift to select text instead |
 | `↑` `↓` (`k` `j`) | everywhere | select (or scroll, in the Log's details) |
 | `r` · `?` · `q` | everywhere | refresh · help · quit |
-| `n` | Organizer | create event (form) |
-| `s` | Organizer | replace the scanner list (form) |
-| `c` | Organizer | cancel event (type `cancel` to confirm) |
-| `f` | Organizer | refund the selected ticket |
-| `m` | Minter | mint 1–3 tickets (form: how many; one transaction) |
-| `b` | Buyer | buy the selected listing (form: max price) |
-| `l` · `d` · `p` · `x` | Minter, Buyer | list (form) · delist · door pass · close |
+| `n` | Create | create event (form) |
+| `s` | Create | replace the scanner list (form) |
+| `c` | Create | cancel event (type `cancel` to confirm) |
+| `f` | Create | refund the selected ticket |
+| `m` · `p` · `x` | Ticket | mint 1–3 tickets (form: how many; one transaction) · door pass · close |
+| `b` · `l` · `d` | Marketplace | buy the selected listing at its price (no form) · list (form) · delist |
 | `v` / paste, `Enter`, `Esc` | Scanner | check a pass · redeem if ADMIT · clear |
 | `c` · `t` · `r` · `Esc` | pass screen | copy · QR/text · new pass · close |
 | `r` · `c` | Log | check confirmations (fills in slot, fee, logs; marks finalized) · copy signature |
 | `→`, `↑↓`, `PgUp`/`PgDn`, `Home`/`End`, `←` | Log | scroll the details and program logs · back to the list |
 | `Tab`/`↓`, `Ctrl+S`, `Ctrl+U`, `Esc` | forms | next field · submit · clear field · cancel |
 
-**Tab contents:** Organizer shows only this wallet's events and all their tickets, including burned ones. Minter shows all events and this wallet's tickets, including ones burned while it held them. Buyer shows listings plus this wallet's tickets. Every ticket table has a **Status** column: Held, Listed · price, or how it ended (Redeemed · when · by which scanner, Refunded, Closed); burned tickets come from the event's transaction history, loaded in the background (the title says "loading history…" meanwhile) and cached. Scanner shows only events where this wallet is a scanner, and the selected event's **Door log**: every ticket redeemed there by any of its scanners, with the time, the scanner and the holder, newest first (the same list for every scanner). Log shows every transaction this wallet sent from the app, also saved to `~/.local/share/frostpass/devnet/log-<wallet>.jsonl` (`$FROSTPASS_DATA` overrides the folder).
+**Tab contents:** Create (organizers) shows only this wallet's events, all their tickets including burned ones, and the selected event's door log. Ticket shows all events and this wallet's tickets, including ones burned while it held them; only minting, door passes and closing happen here. Marketplace shows listings plus this wallet's live tickets; only buying, listing and delisting happen here (a key from the other tab says where to go). Every ticket table has a **Status** column: Held, Listed · price, or how it ended (Redeemed · when · by which scanner, Refunded, Closed); burned tickets come from the event's transaction history, loaded in the background (the title says "loading history…" meanwhile) and cached. Scanner shows only events where this wallet is a scanner, and the selected event's **Door log**: every ticket redeemed there by any of its scanners, with the time, the scanner and the holder, newest first (the same list for every scanner). Log shows every transaction this wallet sent from the app, also saved to `~/.local/share/frostpass/devnet/log-<wallet>.jsonl` (`$FROSTPASS_DATA` overrides the folder).
 
 **Create-event form fields, in order:** Name · Metadata URI · Ticket price (USDC) · Supply · Resale cap (%) · Royalty (%) · Sales end · Event ends · Scanners (comma-separated) · Event ID (pre-filled random). Times accept `+90m`, `+2h`, `+3d` or `YYYY-MM-DD HH:MM` (UTC). Nothing fetches the metadata URI; any placeholder like `https://example.com/qa.json` works.
 
@@ -195,8 +195,8 @@ USDC budget: each mint at 1 USDC costs 1.25; a resale at the 10% cap costs 1.10.
 
 Organizer: `n`, Name `QA Short`, URI `https://example.com/qa.json`, price `1`, supply `5`, cap `10`, royalty `5`, Sales end `+30m`, Event ends `+61m`, Scanners `<SCANNER>`.
 
-- [ ] The confirm screen shows all values and "Creates your USDC account" (first event only). After confirming, the event appears in the Organizer tab, status **On sale**; the organizer now has a USDC account with 0.
-- [ ] Buyer (Minter tab): mint one ticket of QA Short (`m`, `1`). Buyer USDC −1.25; organizer +1; treasury +0.25 (`spl-token balance -u d --owner 9TRRTfqqfeMiACKETs6NUgdAamyxYLggNMbB2S1Jte97 4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU`, compare before/after).
+- [ ] The confirm screen shows all values and "Creates your USDC account" (first event only). After confirming, the event appears in the Create tab, status **On sale**; the organizer now has a USDC account with 0.
+- [ ] Buyer (Ticket tab): mint one ticket of QA Short (`m`, `1`). Buyer USDC −1.25; organizer +1; treasury +0.25 (`spl-token balance -u d --owner 9TRRTfqqfeMiACKETs6NUgdAamyxYLggNMbB2S1Jte97 4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU`, compare before/after).
 - [ ] **After sales end (~30 min):** status shows **Sales closed**. Minting → `Blocked … [SalesEnded]`; listing → `[SalesEnded]`. The buyer can still get a pass (`p`), and the scanner still sees **ADMIT** (don't redeem it if you want the close test below, or mint a second ticket earlier for this).
 - [ ] **After event end (~61 min):** status **Ended**. Pass → `Blocked … [EventEnded]`. Another wallet can't close the buyer's ticket (it isn't in their tabs); the buyer closes it with `x` → the confirm warns it's burned; after confirming the ticket disappears and the buyer's SOL rises by the rents (~0.004 SOL).
 
@@ -211,14 +211,14 @@ Form validation (before the real submit, each should show the error inside the f
 - [ ] Reusing an existing event's ID (same organizer) → `[EventIdTaken]`.
 
 Primary sale:
-- [ ] Organizer tries to mint QA Main from the Minter tab → `Blocked … [ConstraintDuplicateMutableAccount]`.
+- [ ] Organizer tries to mint QA Main from the Ticket tab → `Blocked … [ConstraintDuplicateMutableAccount]`.
 - [ ] Holder `m` → the form says `1–3`. Enter `4` → `[MintLimitReached]`. Enter `3` → confirm shows "Mint 3 tickets", `#1–#3`, total 3.75 USDC, "Your mints 3 of 3" → one transaction. Then `m` again → `[MintLimitReached]`. Holder USDC −3.75.
-- [ ] Holder's tickets show owner "you" in the Minter tab; the Organizer tab lists all tickets.
+- [ ] Holder's tickets show owner "you" in the Ticket tab; the Create tab lists all tickets.
 
 Resale (pick holder's ticket #1):
-- [ ] Holder `l` → the price field is pre-filled with the cap `1.10`. Enter `1.11` → `[PriceAboveCap]`. Enter `1.10` → confirm shows "you get 1.045, organizer 0.055 royalty" → listed.
+- [ ] Holder (Marketplace tab) `l` → the price field is pre-filled with the cap `1.10`. Enter `1.11` → `[PriceAboveCap]`. Enter `1.10` → confirm shows "you get 1.045, organizer 0.055 royalty" → listed.
 - [ ] Holder `l` again on the same ticket → `[AlreadyListed]`. `d` delists; `l` relists at `1.10`.
-- [ ] Buyer (Buyer tab) sees the listing. `b` with max `1.09` → `[PriceExceedsMax]`. With max `1.10` → confirm shows seller 1.045, royalty 0.055 to organizer, "Protocol fee: None on resales" → bought. Balances: buyer −1.10; holder +1.045; organizer +0.055; treasury unchanged.
+- [ ] Buyer (Marketplace tab) sees the listing as **Listed · 1.10 USDC**. `b` goes straight to the confirm screen (no price to type): price 1.10, seller 1.045, royalty 0.055 to organizer, "Protocol fee: None on resales" → bought. (The listed price is also the transaction's limit: if the seller relists higher before you confirm, it's blocked with `[PriceExceedsMax]`.) Balances: buyer −1.10; holder +1.045; organizer +0.055; treasury unchanged.
 - [ ] The ticket now shows owner "you" for the buyer and is gone from the holder's tickets.
 - [ ] Buyer lists it at `1.10`; buyer 2 buys it (resale 2 of 2).
 - [ ] Buyer 2 tries to list it → `[ResaleLimitReached]`.
@@ -229,7 +229,7 @@ Door pass and redeem (ticket #1, now buyer 2's):
 - [ ] Paste it into the **holder's** Scanner tab (the holder isn't a scanner): the tab shows no events, and the Door shows **REFUSE** with "Scanner: this wallet isn't a scanner of the event".
 - [ ] Paste it into **scanner**: **ADMIT** with five ✓ (signature, scanner, event status, freshness, ownership). `Enter` → confirm → redeemed; "Redeemed this session (1)" lists it. The ticket disappears everywhere after refresh; buyer 2's SOL rises by the rents; the scanner's SOL drops only by the fee.
 - [ ] Paste the **same pass again** → REFUSE ("Ticket: no ticket at … redeemed …").
-- [ ] Ticket #1 stays listed everywhere it belongs, as **Redeemed · <time> · by <scanner>**: in the organizer's All tickets, and in buyer 2's Your tickets (its holder at the door). `p`/`l`/`x` on it → "… is redeemed: there's nothing left to do with it". Every scanner of QA Main (scanner and scanner 2) sees it in the Scanner tab's **Door log** (time, ticket, which scanner redeemed it, the holder), newest first, and still does after quitting and restarting the app.
+- [ ] Ticket #1 stays listed where it belongs, as **Redeemed · <time> · by <scanner>**: in the organizer's All tickets (Create tab), and in buyer 2's Your tickets (Ticket tab; buyer 2 held it at the door). `p` or `x` on it → "… is redeemed: there's nothing left to do with it". It's in the **Door log** (time, ticket, which scanner redeemed it, the holder; newest first) for the organizer in the Create tab, without being a scanner, and for every scanner of QA Main (scanner and scanner 2) in the Scanner tab. It's still there after quitting and restarting the app.
 - [ ] Wait > 60s with a fresh pass for another ticket, then paste → REFUSE, freshness ✗ ("expired").
 - [ ] Tamper: change one character in the middle of a pass and paste → REFUSE (signature ✗) or "the pass is damaged".
 
@@ -239,7 +239,7 @@ Scanner add and replace:
 - [ ] **Replace:** Organizer `s` → Scanners `<SCANNER2>, <SCANNER3>` → confirm shows "Revoked: <SCANNER, shortened>" and no "Added" line.
 - [ ] Fresh pass for ticket #2: scanner (revoked) → REFUSE, and QA Main disappears from scanner's Scanner tab after `r`. Scanner 3 → ADMIT → redeem.
 - [ ] Holder makes a pass for ticket #3; scanner 2 (kept through both changes) → ADMIT → redeem.
-- [ ] A non-organizer (e.g. the buyer) has no QA Main in their Organizer tab (can't reach `s`/`c`/`f`).
+- [ ] A non-organizer (e.g. the buyer) has no QA Main in their Create tab (can't reach `s`/`c`/`f`).
 
 ### Event C: "QA Cancel" (sold out, cancel, refund)
 

@@ -2,7 +2,7 @@
 //! queues a [`Job`] and sets a busy status, the loop draws that, then runs the job.
 
 use std::{
-    cell::Cell,
+    cell::{Cell, RefCell},
     collections::HashMap,
     path::{Path, PathBuf},
     time::{Instant, SystemTime, UNIX_EPOCH},
@@ -11,7 +11,10 @@ use std::{
 use anchor_lang::prelude::Pubkey;
 use anyhow::Result;
 use frost_pass::constants::{MAX_MARKUP_BPS, MAX_ROYALTY_BPS, MAX_SCANNERS};
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::{
+    crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind},
+    layout::{Position, Rect},
+};
 use solana_keypair::Keypair;
 use solana_signature::Signature;
 use solana_signer::Signer;
@@ -32,9 +35,12 @@ use std::collections::HashSet;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tab {
-    Organizer,
-    Minter,
-    Buyer,
+    /// The organizer's events: create, scanners, cancel, refund, and the door log.
+    Create,
+    /// Mint tickets; show them at the door; close them after the event.
+    Ticket,
+    /// Buy and sell: listings, list and delist.
+    Marketplace,
     Scanner,
     /// This wallet's transactions.
     Log,
@@ -42,18 +48,18 @@ pub enum Tab {
 
 impl Tab {
     pub const ALL: [Tab; 5] = [
-        Tab::Organizer,
-        Tab::Minter,
-        Tab::Buyer,
+        Tab::Create,
+        Tab::Ticket,
+        Tab::Marketplace,
         Tab::Scanner,
         Tab::Log,
     ];
 
     pub fn title(self) -> &'static str {
         match self {
-            Tab::Organizer => "Organizer",
-            Tab::Minter => "Minter",
-            Tab::Buyer => "Buyer",
+            Tab::Create => "Create",
+            Tab::Ticket => "Ticket",
+            Tab::Marketplace => "Marketplace",
             Tab::Scanner => "Scanner",
             Tab::Log => "Log",
         }
@@ -67,7 +73,28 @@ impl Tab {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Pane {
     Events,
+    /// The tickets table (the selected transaction's details, on the Log tab).
     Tickets,
+    /// The selected event's door log (Create and Scanner tabs).
+    DoorLog,
+}
+
+/// What a click or the wheel lands on, as the last frame drew it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HitTarget {
+    Tab(usize),
+    Pane(Pane),
+}
+
+/// A clickable area of the last frame, and where its rows were.
+#[derive(Clone, Copy, Debug)]
+pub struct Hit {
+    pub target: HitTarget,
+    pub area: Rect,
+    /// The screen row of the first visible list row, its height, and the index it shows.
+    pub first_row: u16,
+    pub row_height: u16,
+    pub offset: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -175,6 +202,8 @@ enum Job {
 
 enum Request {
     Mint(Pubkey),
+    /// The ticket, and the listing price shown (the most the buyer pays).
+    Buy(Pubkey, u64),
     Delist(Pubkey),
     Close(Pubkey),
     Cancel(Pubkey),
@@ -223,6 +252,10 @@ pub struct App<C: Chain> {
     /// Set by each draw: the furthest the details can scroll, and the rows on screen.
     pub log_scroll_max: Cell<u16>,
     pub log_page: Cell<u16>,
+    /// The selected redeem in the door log.
+    pub door_index: usize,
+    /// Clickable areas of the last frame (set by each draw), for the mouse.
+    pub hits: RefCell<Vec<Hit>>,
     pending: Option<Job>,
     /// What to copy (`"Pass"`) and the text; the run loop copies it, then calls [`Self::copied`].
     pub clipboard: Option<(&'static str, String)>,
@@ -254,7 +287,7 @@ impl<C: Chain> App<C> {
             chain,
             wallet,
             cluster,
-            tab: Tab::Minter,
+            tab: Tab::Ticket,
             pane: Pane::Events,
             clock_offset: 0,
             sol: 0,
@@ -283,6 +316,8 @@ impl<C: Chain> App<C> {
             log_scroll: 0,
             log_scroll_max: Cell::new(0),
             log_page: Cell::new(10),
+            door_index: 0,
+            hits: RefCell::new(Vec::new()),
             pending: Some(Job::Refresh),
             clipboard: None,
             quit: false,
@@ -348,9 +383,9 @@ impl<C: Chain> App<C> {
         self.events
             .iter()
             .filter(|event| match self.tab {
-                Tab::Organizer => event.config.organizer == me,
+                Tab::Create => event.config.organizer == me,
                 Tab::Scanner => event.config.scanners.contains(&me),
-                Tab::Minter | Tab::Buyer | Tab::Log => true,
+                Tab::Ticket | Tab::Marketplace | Tab::Log => true,
             })
             .filter(|event| matches_search(event, &self.search))
             .collect()
@@ -428,15 +463,13 @@ impl<C: Chain> App<C> {
                 }),
         );
         rows.retain(|row| match self.tab {
-            Tab::Organizer => true,
-            Tab::Minter => row.owner == Some(me),
-            Tab::Buyer => {
-                row.owner == Some(me)
-                    || row
-                        .live
-                        .as_ref()
-                        .is_some_and(|ticket| ticket.state.seller.is_some())
-            }
+            Tab::Create => true,
+            Tab::Ticket => row.owner == Some(me),
+            // Only what can be traded: listings, and your live tickets to list
+            Tab::Marketplace => row
+                .live
+                .as_ref()
+                .is_some_and(|ticket| ticket.owner == me || ticket.state.seller.is_some()),
             Tab::Scanner | Tab::Log => false,
         });
         rows.sort_by_key(|row| (row.number.is_none(), row.number));
@@ -565,6 +598,7 @@ impl<C: Chain> App<C> {
     fn search_changed(&mut self) {
         self.event_index = 0;
         self.ticket_index = 0;
+        self.door_index = 0;
         self.log_index = 0;
         self.log_scroll = 0;
         self.tickets.clear();
@@ -633,9 +667,21 @@ impl<C: Chain> App<C> {
                 self.switch_tab((self.tab.index() + Tab::ALL.len() - 1) % Tab::ALL.len())
             }
             KeyCode::Char(c @ '1'..='5') => self.switch_tab(c as usize - '1' as usize),
-            KeyCode::Left => self.pane = Pane::Events,
-            // In the Log, the right pane is the selected transaction's details
-            KeyCode::Right if self.tab != Tab::Scanner => self.pane = Pane::Tickets,
+            // Panes left to right: events, tickets (or a transaction's details), door log
+            KeyCode::Left => {
+                self.pane = match (self.tab, self.pane) {
+                    (Tab::Create, Pane::DoorLog) => Pane::Tickets,
+                    _ => Pane::Events,
+                }
+            }
+            KeyCode::Right => {
+                self.pane = match (self.tab, self.pane) {
+                    (Tab::Scanner, _) | (Tab::Create, Pane::Tickets | Pane::DoorLog) => {
+                        Pane::DoorLog
+                    }
+                    _ => Pane::Tickets,
+                }
+            }
             KeyCode::PageUp if self.tab == Tab::Log => {
                 self.scroll_log(-(self.log_page.get() as isize))
             }
@@ -663,25 +709,25 @@ impl<C: Chain> App<C> {
             _ => "Select a ticket first (→ to move to the tickets pane)".to_string(),
         };
         match (self.tab, code) {
-            // Organizer
-            (Tab::Organizer, KeyCode::Char('n')) => {
+            // Create (the organizer)
+            (Tab::Create, KeyCode::Char('n')) => {
                 self.modal = Some(Modal::Form(self.new_event_form()))
             }
-            (Tab::Organizer, KeyCode::Char('s')) => match self.selected_event() {
+            (Tab::Create, KeyCode::Char('s')) => match self.selected_event() {
                 Some(event) => self.modal = Some(Modal::Form(scanners_form(event))),
                 None => self.error(need_event),
             },
-            (Tab::Organizer, KeyCode::Char('c')) => match event {
+            (Tab::Create, KeyCode::Char('c')) => match event {
                 Some(event) => self.queue(Job::Prepare(Request::Cancel(event)), "Checking…"),
                 None => self.error(need_event),
             },
-            (Tab::Organizer, KeyCode::Char('f')) => match ticket {
+            (Tab::Create, KeyCode::Char('f')) => match ticket {
                 Some(ticket) => self.queue(Job::Prepare(Request::Refund(ticket)), "Checking…"),
                 None => self.error(need_ticket),
             },
 
-            // Minter
-            (Tab::Minter, KeyCode::Char('m')) => match self.selected_event() {
+            // Ticket: mint
+            (Tab::Ticket, KeyCode::Char('m')) => match self.selected_event() {
                 // Nothing left to mint: let the checks say why
                 Some(event) if actions::mintable(event, self.mints) == 0 => {
                     self.queue(Job::Prepare(Request::Mint(event.address)), "Checking…")
@@ -690,14 +736,18 @@ impl<C: Chain> App<C> {
                 None => self.error(need_event),
             },
 
-            // Buyer
-            (Tab::Buyer, KeyCode::Char('b')) => match self.selected_ticket() {
-                Some(ticket) => self.modal = Some(Modal::Form(buy_form(&ticket))),
+            // Marketplace: buying and selling. A buy pays the listing price on screen; it's also
+            // the transaction's limit, so a seller who raises it meanwhile can't charge more
+            (Tab::Marketplace, KeyCode::Char('b')) => match self.selected_ticket() {
+                Some(ticket) => match ticket.listing() {
+                    Some((_, price)) => {
+                        self.queue(Job::Prepare(Request::Buy(ticket.asset, price)), "Checking…")
+                    }
+                    None => self.error(format!("{} isn't listed", ticket.name)),
+                },
                 None => self.error(need_ticket),
             },
-
-            // Holder actions, for minters and buyers alike
-            (Tab::Minter | Tab::Buyer, KeyCode::Char('l')) => {
+            (Tab::Marketplace, KeyCode::Char('l')) => {
                 match (self.selected_event(), self.selected_ticket()) {
                     (Some(event), Some(ticket)) => {
                         self.modal = Some(Modal::Form(list_form(event, &ticket)))
@@ -705,15 +755,17 @@ impl<C: Chain> App<C> {
                     _ => self.error(need_ticket),
                 }
             }
-            (Tab::Minter | Tab::Buyer, KeyCode::Char('d')) => match ticket {
+            (Tab::Marketplace, KeyCode::Char('d')) => match ticket {
                 Some(ticket) => self.queue(Job::Prepare(Request::Delist(ticket)), "Checking…"),
                 None => self.error(need_ticket),
             },
-            (Tab::Minter | Tab::Buyer, KeyCode::Char('p')) => match ticket {
+
+            // Ticket: your tickets at the door and after the event
+            (Tab::Ticket, KeyCode::Char('p')) => match ticket {
                 Some(ticket) => self.queue(Job::IssuePass(ticket), "Signing your pass…"),
                 None => self.error(need_ticket),
             },
-            (Tab::Minter | Tab::Buyer, KeyCode::Char('x')) => match ticket {
+            (Tab::Ticket, KeyCode::Char('x')) => match ticket {
                 Some(ticket) => self.queue(Job::Prepare(Request::Close(ticket)), "Checking…"),
                 None => self.error(need_ticket),
             },
@@ -737,6 +789,14 @@ impl<C: Chain> App<C> {
                 }
             }
 
+            // Keys that live on another tab now
+            (Tab::Ticket, KeyCode::Char('b' | 'l' | 'd')) => {
+                self.info("Buying, listing and delisting are in the Marketplace tab (3)")
+            }
+            (Tab::Marketplace, KeyCode::Char('m' | 'p' | 'x')) => {
+                self.info("Minting, door passes and closing are in the Ticket tab (2)")
+            }
+
             (_, KeyCode::Esc) if !self.search.is_empty() => {
                 self.search.clear();
                 self.search_changed();
@@ -751,6 +811,7 @@ impl<C: Chain> App<C> {
         self.tab = Tab::ALL[index];
         self.pane = Pane::Events;
         self.ticket_index = 0;
+        self.door_index = 0;
         // Keep the same event selected when the new tab shows it
         let events = self.visible_events();
         self.event_index = previous
@@ -765,7 +826,7 @@ impl<C: Chain> App<C> {
         if self.tab == Tab::Log {
             match self.pane {
                 Pane::Events => self.move_log_selection(delta),
-                Pane::Tickets => self.scroll_log(delta),
+                Pane::Tickets | Pane::DoorLog => self.scroll_log(delta),
             }
             return;
         }
@@ -778,12 +839,77 @@ impl<C: Chain> App<C> {
                 if next != self.event_index {
                     self.event_index = next;
                     self.ticket_index = 0;
+                    self.door_index = 0;
                     self.queue(Job::LoadTickets, "Loading tickets…");
                 }
             }
             Pane::Tickets => {
                 self.ticket_index = step(self.ticket_index, self.visible_tickets().len())
             }
+            Pane::DoorLog => self.door_index = step(self.door_index, self.event_redeems().len()),
+        }
+    }
+
+    /// Clicks focus a pane (and pick the row under the pointer) or switch tabs; the wheel
+    /// scrolls the pane under the pointer.
+    pub fn on_mouse(&mut self, mouse: MouseEvent) {
+        if self.modal.is_some() || self.searching {
+            return;
+        }
+        let at = Position::new(mouse.column, mouse.row);
+        let Some(hit) = self
+            .hits
+            .borrow()
+            .iter()
+            .rev()
+            .find(|hit| hit.area.contains(at))
+            .copied()
+        else {
+            return;
+        };
+        let pane = match hit.target {
+            HitTarget::Tab(index) => {
+                if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+                    self.switch_tab(index);
+                }
+                return;
+            }
+            HitTarget::Pane(pane) => pane,
+        };
+        match mouse.kind {
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                self.pane = pane;
+                let step = if self.tab == Tab::Log && pane == Pane::Tickets {
+                    3
+                } else {
+                    1
+                };
+                let delta = if mouse.kind == MouseEventKind::ScrollUp {
+                    -step
+                } else {
+                    step
+                };
+                self.move_selection(delta);
+            }
+            MouseEventKind::Down(MouseButton::Left) => {
+                self.pane = pane;
+                // The Log's details pane scrolls; it has no rows to pick
+                if self.tab == Tab::Log && pane == Pane::Tickets {
+                    return;
+                }
+                if hit.row_height == 0 || mouse.row < hit.first_row {
+                    return;
+                }
+                let row = hit.offset + ((mouse.row - hit.first_row) / hit.row_height) as usize;
+                let current = match (self.tab, pane) {
+                    (Tab::Log, Pane::Events) => self.log_index,
+                    (_, Pane::Events) => self.event_index,
+                    (_, Pane::Tickets) => self.ticket_index,
+                    (_, Pane::DoorLog) => self.door_index,
+                };
+                self.move_selection(row as isize - current as isize);
+            }
+            _ => {}
         }
     }
 
@@ -1116,8 +1242,6 @@ impl<C: Chain> App<C> {
             }),
             FormKind::List { asset } => format::parse_usdc(form.value(0))
                 .and_then(|price| actions::prepare_list(&self.chain, &self.wallet, asset, price)),
-            FormKind::Buy { asset } => format::parse_usdc(form.value(0))
-                .and_then(|max| actions::prepare_buy(&self.chain, &self.wallet, asset, max)),
             FormKind::ScanPass => {
                 match actions::inspect_pass(&self.chain, &self.me(), form.value(0)) {
                     Ok(report) => {
@@ -1178,6 +1302,11 @@ impl<C: Chain> App<C> {
         let (plan, typed, after) = match request {
             Request::Mint(event) => (
                 actions::prepare_mint(chain, wallet, &event)?,
+                None,
+                After::Nothing,
+            ),
+            Request::Buy(asset, price) => (
+                actions::prepare_buy(chain, wallet, &asset, price)?,
                 None,
                 After::Nothing,
             ),
@@ -1398,21 +1527,6 @@ fn list_form(event: &EventInfo, ticket: &TicketInfo) -> Form {
                 format::usdc(cap),
                 format::percent(event.config.markup_cap_bps)
             ),
-        )],
-    )
-}
-
-fn buy_form(ticket: &TicketInfo) -> Form {
-    let price = ticket.state.list_price;
-    Form::new(
-        FormKind::Buy {
-            asset: ticket.asset,
-        },
-        format!("Buy {}", ticket.name),
-        vec![Field::new(
-            "Max price",
-            format::usdc(price),
-            "USDC: the most you'll pay; the purchase fails if the listing costs more",
         )],
     )
 }

@@ -15,12 +15,15 @@ use std::{
 
 use anyhow::Result;
 use ratatui::crossterm::{
-    event::{self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyEventKind},
+    event::{
+        self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+        Event, KeyEventKind,
+    },
     execute,
 };
 use solana_keypair::Keypair;
 
-pub use app::{App, Tab};
+pub use app::{App, Hit, HitTarget, Pane, Tab};
 pub use view::draw;
 
 use crate::chain::Chain;
@@ -45,9 +48,10 @@ pub fn run(
         app = app.with_store(dir);
     }
     let mut terminal = ratatui::init();
-    execute!(stdout(), EnableBracketedPaste)?;
+    // The mouse clicks and scrolls panes; hold Shift to select text with it instead
+    execute!(stdout(), EnableBracketedPaste, EnableMouseCapture)?;
     let result = run_app(&mut terminal, app);
-    let _ = execute!(stdout(), DisableBracketedPaste);
+    let _ = execute!(stdout(), DisableBracketedPaste, DisableMouseCapture);
     ratatui::restore();
     result
 }
@@ -71,6 +75,7 @@ fn run_app(terminal: &mut ratatui::DefaultTerminal, mut app: App<impl Chain>) ->
             match event::read()? {
                 Event::Key(key) if key.kind == KeyEventKind::Press => app.on_key(key),
                 Event::Paste(text) => app.on_paste(&text),
+                Event::Mouse(mouse) => app.on_mouse(mouse),
                 _ => {}
             }
         } else if app.has_idle_work() {

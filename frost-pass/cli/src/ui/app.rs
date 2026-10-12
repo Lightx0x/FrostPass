@@ -84,6 +84,8 @@ pub enum Pane {
 pub enum HitTarget {
     Tab(usize),
     Pane(Pane),
+    /// The wallet address in the header: a click copies it.
+    Wallet,
 }
 
 /// A clickable area of the last frame, and where its rows were.
@@ -135,6 +137,8 @@ pub struct PassView {
     pub ticket: String,
     /// Show the pass as text instead of a QR code.
     pub as_text: bool,
+    /// The full-size QR code (z) instead of the compact one.
+    pub large: bool,
 }
 
 pub enum Modal {
@@ -258,6 +262,8 @@ pub struct App<C: Chain> {
     pub door_index: usize,
     /// Clickable areas of the last frame (set by each draw), for the mouse.
     pub hits: RefCell<Vec<Hit>>,
+    /// Door passes show the full-size QR code (toggled with z on the pass screen).
+    pub large_qr: bool,
     pending: Option<Job>,
     /// What to copy (`"Pass"`) and the text; the run loop copies it, then calls [`Self::copied`].
     pub clipboard: Option<(&'static str, String)>,
@@ -320,6 +326,7 @@ impl<C: Chain> App<C> {
             log_page: Cell::new(10),
             door_index: 0,
             hits: RefCell::new(Vec::new()),
+            large_qr: false,
             pending: Some(Job::Refresh),
             clipboard: None,
             quit: false,
@@ -640,6 +647,11 @@ impl<C: Chain> App<C> {
                 code => {
                     match code {
                         KeyCode::Char('t') => view.as_text = !view.as_text,
+                        // Remembered for the next pass this session
+                        KeyCode::Char('z') => {
+                            view.large = !view.large;
+                            self.large_qr = view.large;
+                        }
                         KeyCode::Char('c') => {
                             self.clipboard = Some(("Pass", view.pass.encode()));
                         }
@@ -869,10 +881,17 @@ impl<C: Chain> App<C> {
         else {
             return;
         };
+        let click = matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left));
         let pane = match hit.target {
             HitTarget::Tab(index) => {
-                if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+                if click {
                     self.switch_tab(index);
+                }
+                return;
+            }
+            HitTarget::Wallet => {
+                if click {
+                    self.clipboard = Some(("Wallet address", self.me().to_string()));
                 }
                 return;
             }
@@ -1471,6 +1490,7 @@ impl<C: Chain> App<C> {
             asset: *asset,
             ticket: ticket.name,
             as_text: false,
+            large: self.large_qr,
         }));
         self.done("Pass ready: show it at the door");
         Ok(())

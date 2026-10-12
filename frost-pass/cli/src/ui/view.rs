@@ -82,9 +82,19 @@ fn draw_header<C: Chain>(frame: &mut Frame, area: Rect, app: &App<C>) {
     );
     let mut left = theme::logo(app.animation_ms());
     left.extend([
-        Span::styled(format!("  {}", app.cluster), theme::muted()),
-        Span::styled("  wallet ", theme::muted()),
-        Span::styled(format::short(&app.me()), theme::strong()),
+        Span::raw("  "),
+        theme::live_dot(app.animation_ms()),
+        Span::styled(format!(" {}  ", app.cluster), theme::muted()),
+    ]);
+    // The wallet: click it to copy the full address
+    let wallet = format::short(&app.me());
+    let wallet_x = area.x + left.width() as u16;
+    app.hits.borrow_mut().push(pane_hit(
+        HitTarget::Wallet,
+        Rect::new(wallet_x, area.y, wallet.chars().count() as u16, 1),
+    ));
+    left.extend([
+        Span::styled(wallet, theme::strong()),
         Span::styled("  ", theme::muted()),
         Span::styled(format!("{} SOL", format::sol(app.sol)), theme::text()),
         Span::styled("  ·  ", theme::muted()),
@@ -1249,54 +1259,146 @@ fn draw_confirm(frame: &mut Frame, confirm: &super::app::Confirm) {
     draw_modal(frame, &plan.title, lines, keys, CONFIRM_WIDTH);
 }
 
+/// The door pass as a QR code: compact sextants by default (27×18 cells, plenty for a phone),
+/// or full-size half blocks with z (twice as big each way, for a far or dim scanner). Each
+/// goes in the normal popup if it fits, else a tight frame with just the essentials; a large
+/// code that doesn't fit falls back to the compact one, and text shows only when nothing fits.
 fn draw_pass(frame: &mut Frame, view: &super::app::PassView, now: i64) {
-    let qr = view.pass.qr_rows().unwrap_or_default();
-    let qr_width = qr.first().map_or(0, |row| row.chars().count()) as u16;
     let expiry = view.pass.expiry;
-    let text = view.pass.encode();
-
-    let mut lines = vec![
-        Line::styled(view.ticket.clone(), theme::strong()),
-        if now <= expiry {
-            Line::styled(
-                format!("Valid for {}s · signed by your wallet", expiry - now),
-                theme::ok(),
-            )
-        } else {
-            Line::styled(
-                "Expired: press r for a new pass",
-                theme::danger().add_modifier(Modifier::BOLD),
-            )
-        },
-        Line::raw(""),
+    let toggle = if view.as_text { "show QR" } else { "show text" };
+    let zoom = if view.large { "smaller" } else { "bigger" };
+    let keys = [
+        ("c", "copy"),
+        ("t", toggle),
+        ("z", zoom),
+        ("r", "new pass"),
+        ("Esc", "close"),
     ];
-    let area = frame.area();
-    let fits = qr_width + 8 <= area.width && qr.len() as u16 + 12 <= area.height;
-    if fits && !view.as_text {
-        let qr_style = Style::new().fg(Color::Black).bg(Color::White);
-        lines.extend(qr.into_iter().map(|row| Line::styled(row, qr_style)));
+    // The tight frame's keys, short enough for two rows under the compact code
+    let tight_keys = [
+        ("c", "copy"),
+        ("t", "text"),
+        ("z", zoom),
+        ("r", "new"),
+        ("Esc", "close"),
+    ];
+    let validity = if now <= expiry {
+        Line::styled(
+            format!("Valid for {}s · signed by your wallet", expiry - now),
+            theme::ok(),
+        )
     } else {
-        if !fits {
-            lines.push(Line::styled(
-                "Enlarge the terminal to show the QR code; the text works too.",
-                theme::warn(),
-            ));
-            lines.push(Line::raw(""));
+        Line::styled(
+            "Expired: press r for a new pass",
+            theme::danger().add_modifier(Modifier::BOLD),
+        )
+    };
+    let area = frame.area();
+    let footer_rows = |keys: &[(&str, &str)], width: u16| {
+        Paragraph::new(footer(keys))
+            .wrap(Wrap { trim: false })
+            .line_count(width.max(1)) as u16
+    };
+
+    if !view.as_text {
+        let sizes = if view.large {
+            vec![view.pass.qr_rows(), view.pass.qr_rows_compact()]
+        } else {
+            vec![view.pass.qr_rows_compact()]
+        };
+        for qr in sizes.iter().filter_map(|qr| qr.as_ref().ok()) {
+            let width = qr.first().map_or(0, |row| row.chars().count()) as u16;
+            let height = qr.len() as u16;
+            // The normal popup: padding, the ticket and its validity above the code
+            let popup_width = (width + MODAL_CHROME_WIDTH).max(64).min(area.width);
+            let text_width = popup_width.saturating_sub(MODAL_CHROME_WIDTH);
+            if width <= text_width
+                && 3 + height + 1 + footer_rows(&keys, text_width) + MODAL_CHROME_HEIGHT
+                    <= area.height
+            {
+                let mut lines = vec![
+                    Line::styled(view.ticket.clone(), theme::strong()),
+                    validity,
+                    Line::raw(""),
+                ];
+                lines.extend(
+                    qr.iter()
+                        .map(|row| Line::styled(row.clone(), qr_style()).centered()),
+                );
+                draw_modal(frame, "Door pass", lines, &keys, popup_width);
+                return;
+            }
+            // The tight frame: borders, the code, the keys; ticket and time in the title
+            let tight_height = height + 2 + footer_rows(&tight_keys, width);
+            if width + 2 <= area.width && tight_height <= area.height {
+                draw_pass_tight(frame, view, qr, now, &tight_keys, tight_height);
+                return;
+            }
         }
-        lines.push(Line::styled(text, theme::strong()));
     }
 
-    draw_modal(
-        frame,
-        "Door pass",
-        lines,
-        &[
-            ("c", "copy"),
-            ("t", if view.as_text { "show QR" } else { "show text" }),
-            ("r", "new pass"),
-            ("Esc", "close"),
-        ],
-        (qr_width + 8).max(64),
+    // Nothing fits: say so first (in a tiny window it's all that shows), then the text
+    let mut lines = Vec::new();
+    if !view.as_text {
+        lines.push(Line::styled(
+            "Too small for the QR code (needs about 30×21): c copies the pass",
+            theme::warn(),
+        ));
+        lines.push(Line::raw(""));
+    }
+    lines.extend([
+        Line::styled(view.ticket.clone(), theme::strong()),
+        validity,
+        Line::raw(""),
+        Line::styled(view.pass.encode(), theme::strong()),
+    ]);
+    draw_modal(frame, "Door pass", lines, &keys, 64);
+}
+
+/// Dark modules on light, whatever the terminal's colours.
+fn qr_style() -> Style {
+    Style::new().fg(Color::Black).bg(Color::White)
+}
+
+fn draw_pass_tight(
+    frame: &mut Frame,
+    view: &super::app::PassView,
+    qr: &[String],
+    now: i64,
+    keys: &[(&str, &str)],
+    height: u16,
+) {
+    let width = qr.first().map_or(0, |row| row.chars().count()) as u16;
+    let number = view.ticket.rsplit_once('#').map_or("pass", |(_, n)| n);
+    let (time, style) = if now <= view.pass.expiry {
+        (format!("{}s", view.pass.expiry - now), theme::ok())
+    } else {
+        ("expired: r".to_string(), theme::danger())
+    };
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(theme::accent())
+        .title(Line::from(vec![
+            Span::styled(format!(" #{number} · "), theme::title(true)),
+            Span::styled(format!("{time} "), style.add_modifier(Modifier::BOLD)),
+        ]));
+    let area = modal_area(frame, width + 2, height);
+    let inner = block.inner(area);
+    frame.render_widget(Clear, area);
+    frame.render_widget(block, area);
+    let [code, keys_area] =
+        Layout::vertical([Constraint::Length(qr.len() as u16), Constraint::Min(0)]).areas(inner);
+    frame.render_widget(
+        Paragraph::new(
+            qr.iter()
+                .map(|row| Line::styled(row.clone(), qr_style()))
+                .collect::<Vec<_>>(),
+        ),
+        code,
+    );
+    frame.render_widget(
+        Paragraph::new(footer(keys)).wrap(Wrap { trim: false }),
+        keys_area,
     );
 }
 

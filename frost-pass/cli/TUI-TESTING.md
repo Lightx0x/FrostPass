@@ -154,7 +154,7 @@ Clean up at the end: `tmux kill-session -t <name>` for each actor.
 
 ## TUI reference
 
-**Layout:** header (cluster, wallet, SOL, USDC, cluster clock) · tabs `1 Create │ 2 Ticket │ 3 Marketplace │ 4 Scanner │ 5 Log` · left: events, newest first (each shows its ID) · right: event details and tickets (the Door panel on the Scanner tab; the selected transaction on the Log tab) · key hints · status line.
+**Layout:** header (logo, cluster with a blinking dot, wallet address — click it to copy the full address — SOL, USDC, cluster clock) · tabs `1 Create │ 2 Ticket │ 3 Marketplace │ 4 Scanner │ 5 Log` · left: events, newest first (each shows its ID) · right: event details and tickets (the Door panel on the Scanner tab; the selected transaction on the Log tab) · key hints · status line.
 
 | Keys | Where | Action |
 |---|---|---|
@@ -171,7 +171,7 @@ Clean up at the end: `tmux kill-session -t <name>` for each actor.
 | `m` · `p` · `x` | Ticket | mint 1–3 tickets (form: how many; one transaction) · door pass · close |
 | `b` · `l` · `d` | Marketplace | buy the selected listing at its price (no form) · list (form) · delist |
 | `v` / paste, `Enter`, `Esc` | Scanner | check a pass · redeem if ADMIT · clear |
-| `c` · `t` · `r` · `Esc` | pass screen | copy · QR/text · new pass · close |
+| `c` · `t` · `z` · `r` · `Esc` | pass screen | copy · QR/text · full-size QR (twice as big, remembered for the session) · new pass · close |
 | `r` · `c` | Log | check confirmations (fills in slot, fee, logs; marks finalized) · copy signature |
 | `→`, `↑↓`, `PgUp`/`PgDn`, `Home`/`End`, `←` | Log | scroll the details and program logs · back to the list |
 | `Tab`/`↓`, `Ctrl+S`, `Ctrl+U`, `Esc` | forms | next field · submit · clear field · cancel |
@@ -265,7 +265,7 @@ Organizer: `n`, Name `QA Cancel`, price `1`, supply `1`, cap `10`, royalty `5`, 
 
 ### Robustness
 
-- [ ] Resize a window small (`tmux resize-window -t holder -x 80 -y 24` for the automated sessions) and open a pass: it should say to enlarge the terminal for the QR and still show the text. Nothing should crash or garble permanently.
+- [ ] The door pass is a compact QR code by default (27×18 cells, centered in the popup); `z` doubles it and `z` again shrinks it back. A phone scans both. Shrink the window with the pass open (`tmux resize-window -t holder -x 40 -y 24` for the automated sessions): the code moves into a tight frame with the ticket number and countdown in its border, a full-size code falls back to compact, and only below about 30×21 does it say "Too small for the QR code" and show the text. Nothing should crash or garble permanently.
 - [ ] Long values (a pasted pass, a scanner list) wrap inside forms and confirm screens, and the key hints stay visible.
 - [ ] Press keys during a "…" busy status; the app shouldn't double-send.
 - [ ] Note any RPC errors (429s) and whether the app recovers after `r`.

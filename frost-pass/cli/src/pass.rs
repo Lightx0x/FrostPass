@@ -118,33 +118,87 @@ impl Pass {
         })
     }
 
-    /// The pass as a QR code, two modules per text row (half blocks) with a quiet zone. Draw it
-    /// dark on light: the block characters are the dark modules.
-    pub fn qr_rows(&self) -> Result<Vec<String>> {
+    /// The pass's QR modules with a 2-module quiet zone, row by row (`true` = dark), and the side
+    /// length.
+    fn qr_modules(&self) -> Result<(Vec<bool>, usize)> {
         let code = QrCode::with_error_correction_level(self.encode(), EcLevel::L)
             .context("the pass doesn't fit in a QR code")?;
         let width = code.width();
         let colors = code.to_colors();
         const QUIET: usize = 2;
         let size = width + 2 * QUIET;
-        let dark = |x: usize, y: usize| {
-            (QUIET..width + QUIET).contains(&x)
-                && (QUIET..width + QUIET).contains(&y)
-                && colors[(y - QUIET) * width + (x - QUIET)] == Color::Dark
-        };
+        let modules = (0..size * size)
+            .map(|i| {
+                let (x, y) = (i % size, i / size);
+                (QUIET..width + QUIET).contains(&x)
+                    && (QUIET..width + QUIET).contains(&y)
+                    && colors[(y - QUIET) * width + (x - QUIET)] == Color::Dark
+            })
+            .collect();
+        Ok((modules, size))
+    }
+
+    /// Draws the QR with `wide` × `tall` modules per character cell, `glyph` turning a cell's
+    /// modules (bit `x + wide * y`, dark = 1) into its character.
+    fn qr_cells(&self, wide: usize, tall: usize, glyph: fn(u8) -> char) -> Result<Vec<String>> {
+        let (modules, size) = self.qr_modules()?;
+        let dark = |x: usize, y: usize| x < size && y < size && modules[y * size + x];
         Ok((0..size)
-            .step_by(2)
+            .step_by(tall)
             .map(|y| {
                 (0..size)
-                    .map(|x| match (dark(x, y), dark(x, y + 1)) {
-                        (true, true) => '█',
-                        (true, false) => '▀',
-                        (false, true) => '▄',
-                        (false, false) => ' ',
+                    .step_by(wide)
+                    .map(|x| {
+                        let mut bits = 0u8;
+                        for dy in 0..tall {
+                            for dx in 0..wide {
+                                if dark(x + dx, y + dy) {
+                                    bits |= 1 << (dx + wide * dy);
+                                }
+                            }
+                        }
+                        glyph(bits)
                     })
                     .collect()
             })
             .collect())
+    }
+
+    /// The pass as a QR code, one module per column and two per row (half blocks): square
+    /// modules in a normal 1:2 terminal cell. Draw it dark on light: the glyphs are the dark
+    /// modules.
+    pub fn qr_rows(&self) -> Result<Vec<String>> {
+        self.qr_cells(1, 2, |bits| match bits {
+            0b11 => '█',
+            0b01 => '▀',
+            0b10 => '▄',
+            _ => ' ',
+        })
+    }
+
+    /// The same QR at about half the size each way: 2×3 modules per cell (Unicode sextants), so
+    /// it fits small terminals. Modules come out nearly square (about 3:4 in a 1:2 cell), which
+    /// phone scanners read like any QR code.
+    pub fn qr_rows_compact(&self) -> Result<Vec<String>> {
+        self.qr_cells(2, 3, sextant)
+    }
+}
+
+/// The character for a 2×3 cell whose dark sixths are `bits` (bit 0 top left, 1 top right,
+/// 2 middle left … 5 bottom right). Unicode's sextant block (U+1FB00) skips the four patterns
+/// that already exist elsewhere: empty, full, and the left and right halves.
+fn sextant(bits: u8) -> char {
+    const LEFT: u8 = 0b01_0101;
+    const RIGHT: u8 = 0b10_1010;
+    match bits & 0b11_1111 {
+        0 => ' ',
+        0b11_1111 => '█',
+        LEFT => '▌',
+        RIGHT => '▐',
+        bits => {
+            let skipped = 1 + u32::from(bits > LEFT) + u32::from(bits > RIGHT);
+            char::from_u32(0x1FB00 + u32::from(bits) - skipped).unwrap_or('?')
+        }
     }
 }
 
@@ -186,6 +240,51 @@ fn base32_decode(text: &str) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_compact_qr_is_the_same_code_at_half_the_size() {
+        let holder = Keypair::new();
+        let pass = Pass::sign(&holder, &Pubkey::new_unique(), &Pubkey::new_unique(), 0).unwrap();
+        let (modules, size) = pass.qr_modules().unwrap();
+        let full = pass.qr_rows().unwrap();
+        let compact = pass.qr_rows_compact().unwrap();
+        assert_eq!(
+            (full[0].chars().count(), full.len()),
+            (size, size.div_ceil(2))
+        );
+        assert_eq!(
+            (compact[0].chars().count(), compact.len()),
+            (size.div_ceil(2), size.div_ceil(3))
+        );
+        // Every cell of the compact code shows exactly its six modules
+        let sextant_bits = |c: char| -> u8 {
+            match c {
+                ' ' => 0,
+                '█' => 0b11_1111,
+                '▌' => 0b01_0101,
+                '▐' => 0b10_1010,
+                c => {
+                    let index = c as u32 - 0x1FB00;
+                    let bits = index + 1;
+                    let bits = bits + u32::from(bits >= 0b01_0101);
+                    (bits + u32::from(bits >= 0b10_1010)) as u8
+                }
+            }
+        };
+        let dark = |x: usize, y: usize| x < size && y < size && modules[y * size + x];
+        for (row, line) in compact.iter().enumerate() {
+            for (col, c) in line.chars().enumerate() {
+                let bits = sextant_bits(c);
+                for i in 0..6 {
+                    assert_eq!(
+                        bits >> i & 1 == 1,
+                        dark(col * 2 + i % 2, row * 3 + i / 2),
+                        "cell {col},{row} sixth {i}"
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn pass_round_trips_and_detects_tampering() {

@@ -806,6 +806,123 @@ fn an_event_an_hour_from_now_lands() {
     assert!(event.config.event_end >= START + 300 + 3_600);
 }
 
+/// The door pass shows the biggest QR code the terminal has room for, down to small windows,
+/// and the header's wallet address copies on a click.
+#[test]
+fn the_door_pass_fits_the_terminal() {
+    use frost_pass_cli::ui::{draw, App, HitTarget};
+    use ratatui::{
+        backend::TestBackend,
+        crossterm::event::{
+            KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+        },
+        Terminal,
+    };
+
+    let mut chain = SvmChain::new();
+    let organizer = chain.wallet(Some(0));
+    let holder = chain.wallet(Some(100 * USDC));
+    let event = chain
+        .run(
+            &organizer,
+            actions::prepare_init_event(&chain, &organizer, new_event(5, vec![organizer.pubkey()])),
+        )
+        .created
+        .unwrap();
+    chain.run(&holder, actions::prepare_mint(&chain, &holder, &event));
+    let holder_key = holder.pubkey();
+    let mut app = App::new(chain, holder, "litesvm".into()).without_animation();
+    while app.has_pending() || app.has_idle_work() {
+        if app.has_pending() {
+            app.run_pending();
+        } else {
+            app.run_idle();
+        }
+    }
+    let render = |app: &App<SvmChain>, width: u16, height: u16| {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|frame| draw(frame, app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        buffer
+            .content
+            .chunks(buffer.area.width as usize)
+            .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>() + "\n")
+            .collect::<String>()
+    };
+
+    // The wallet in the header copies the whole address
+    render(&app, 120, 42);
+    let wallet = app
+        .hits
+        .borrow()
+        .iter()
+        .find(|hit| hit.target == HitTarget::Wallet)
+        .copied()
+        .unwrap();
+    app.on_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: wallet.area.x,
+        row: wallet.area.y,
+        modifiers: KeyModifiers::NONE,
+    });
+    assert_eq!(
+        app.clipboard,
+        Some(("Wallet address", holder_key.to_string()))
+    );
+    assert!(
+        !render(&app, 120, 42).contains("wallet "),
+        "no \"wallet\" label"
+    );
+
+    app.on_key(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE));
+    app.on_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE));
+    while app.has_pending() {
+        app.run_pending();
+    }
+    let is_sextant = |c: char| ('\u{1FB00}'..='\u{1FB3B}').contains(&c);
+    // Compact by default, even with room to spare: half the size each way
+    let roomy = render(&app, 120, 42);
+    assert!(
+        roomy.chars().any(is_sextant) && !roomy.contains('▀') && roomy.contains("z bigger"),
+        "compact by default\n{roomy}"
+    );
+    let popup = render(&app, 50, 28);
+    assert!(
+        popup.contains("Door pass") && popup.chars().any(is_sextant),
+        "compact, popup\n{popup}"
+    );
+    let small = render(&app, 32, 22);
+    assert!(
+        small.contains("#1 · ") && small.chars().any(is_sextant) && !small.contains("Too small"),
+        "compact, tight frame\n{small}"
+    );
+    // z: full size where it fits (popup, then tight frame), else the compact code again
+    app.on_key(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::NONE));
+    let full = render(&app, 120, 42);
+    assert!(
+        full.contains('▀') && !full.chars().any(is_sextant) && full.contains("z smaller"),
+        "full size\n{full}"
+    );
+    let tight = render(&app, 60, 30);
+    assert!(
+        tight.contains("#1 · ") && tight.contains('▀'),
+        "full size, tight frame\n{tight}"
+    );
+    assert!(
+        render(&app, 40, 24).chars().any(is_sextant),
+        "too big: compact"
+    );
+    // A new pass keeps the choice
+    app.on_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
+    while app.has_pending() {
+        app.run_pending();
+    }
+    assert!(render(&app, 120, 42).contains('▀'), "still full size");
+    // Only a really tiny window falls back to the text
+    let tiny = render(&app, 24, 12);
+    assert!(tiny.contains("Too small"), "{tiny}");
+}
+
 /// Buying in the Marketplace takes the listing's price: no price to type, and the confirm
 /// screen shows what's paid. Minting and passes point to the Ticket tab.
 #[test]
@@ -1053,8 +1170,11 @@ fn the_app_walks_one_wallet_through_every_tab() {
     press(&mut app, KeyCode::Char('p'));
     let pass_screen = screen(&mut app);
     assert!(
-        pass_screen.contains("Door pass") && pass_screen.contains("▀"),
-        "the QR code fits"
+        pass_screen.contains("Door pass")
+            && pass_screen
+                .chars()
+                .any(|c| ('\u{1FB00}'..='\u{1FB3B}').contains(&c)),
+        "the QR code shows"
     );
     assert!(pass_screen.contains("Esc close"), "{pass_screen}");
     // The text form wraps over several rows; the key hints stay in view

@@ -164,6 +164,25 @@ pub fn logo(ms: Option<u128>) -> Line<'static> {
     Line::from(spans)
 }
 
+/// The cluster's "live" dot: frost blue, fading out and back like a beacon, about once a
+/// second. Solid when the animation is off.
+pub fn live_dot(ms: Option<u128>) -> Span<'static> {
+    const BLINK_MS: u128 = 1_200;
+    let glow = match ms {
+        None => 1.0,
+        Some(ms) => {
+            let phase = (ms % BLINK_MS) as f32 / BLINK_MS as f32;
+            0.5 + 0.5 * (phase * std::f32::consts::TAU).cos()
+        }
+    };
+    Span::styled(
+        "●",
+        Style::new()
+            .fg(mix(ICE_DEEP, ICE, 0.15 + 0.85 * glow))
+            .add_modifier(Modifier::BOLD),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

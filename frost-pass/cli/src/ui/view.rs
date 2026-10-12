@@ -16,13 +16,14 @@ use ratatui::{
 };
 
 use super::{
-    app::{App, Modal, Pane, StatusKind, Tab},
+    app::{App, Modal, Pane, StatusKind, Tab, TicketRow},
     form::Form,
     theme,
 };
 use crate::{
     chain::Chain,
     checks, format,
+    history::Fate,
     model::{EventInfo, EventStatus},
     store::{LogEntry, LogStatus},
 };
@@ -330,11 +331,14 @@ fn draw_event_and_tickets<C: Chain>(frame: &mut Frame, area: Rect, app: &App<C>)
 
     let focused = app.pane == Pane::Tickets && app.modal.is_none();
     let visible = app.visible_tickets();
-    let title = match app.tab {
+    let mut title = match app.tab {
         Tab::Organizer => format!("All tickets ({})", visible.len()),
         Tab::Minter => format!("Your tickets ({})", visible.len()),
         _ => format!("Listings and your tickets ({})", visible.len()),
     };
+    if app.history_loading() {
+        title += " · loading history…";
+    }
     let block = block(&title, focused);
     if visible.is_empty() {
         let hint = match app.tab {
@@ -355,25 +359,29 @@ fn draw_event_and_tickets<C: Chain>(frame: &mut Frame, area: Rect, app: &App<C>)
     let rows: Vec<Row> = visible
         .iter()
         .map(|ticket| {
-            let number = ticket.name.rsplit('#').next().unwrap_or("?");
-            let owner = if ticket.owner == me {
-                Span::styled("you", theme::accent())
-            } else {
-                Span::styled(format::short(&ticket.owner), theme::text())
-            };
-            let listing = match ticket.listing() {
-                Some((_, price)) => {
-                    Span::styled(format!("{} USDC", format::usdc(price)), theme::ok())
-                }
+            let number = ticket
+                .number
+                .map_or_else(|| "?".to_string(), |n| n.to_string());
+            let owner = match ticket.owner {
+                Some(owner) if owner == me => Span::styled("you", theme::accent()),
+                Some(owner) => Span::styled(format::short(&owner), theme::text()),
                 None => Span::styled("—", theme::muted()),
             };
+            let (status, style) = ticket_status(ticket, &me);
+            let dim = |style: Style| {
+                if ticket.live.is_some() {
+                    style
+                } else {
+                    style.add_modifier(Modifier::DIM)
+                }
+            };
             Row::new(vec![
-                Cell::from(Span::styled(format!("#{number}"), theme::strong())),
+                Cell::from(Span::styled(format!("#{number}"), dim(theme::strong()))),
                 Cell::from(owner),
-                Cell::from(listing),
+                Cell::from(Span::styled(status, style)),
                 Cell::from(Span::styled(
-                    format!("{}/{MAX_RESALE}", ticket.state.resale_count),
-                    theme::text(),
+                    format!("{}/{MAX_RESALE}", ticket.resales()),
+                    dim(theme::text()),
                 )),
                 Cell::from(Span::styled(format::short(&ticket.asset), theme::muted())),
             ])
@@ -384,13 +392,13 @@ fn draw_event_and_tickets<C: Chain>(frame: &mut Frame, area: Rect, app: &App<C>)
         [
             Constraint::Length(7),
             Constraint::Length(11),
-            Constraint::Length(14),
+            Constraint::Min(30),
             Constraint::Length(8),
-            Constraint::Min(10),
+            Constraint::Length(12),
         ],
     )
     .header(
-        Row::new(["Ticket", "Owner", "Listed at", "Resales", "Asset"])
+        Row::new(["Ticket", "Owner", "Status", "Resales", "Asset"])
             .style(theme::muted().add_modifier(Modifier::BOLD))
             .bottom_margin(1),
     )
@@ -400,8 +408,44 @@ fn draw_event_and_tickets<C: Chain>(frame: &mut Frame, area: Rect, app: &App<C>)
     frame.render_stateful_widget(table, tickets, &mut state);
 }
 
+/// `"10-12 07:20"`: a short UTC time for tables.
+fn short_time(at: Option<i64>) -> String {
+    at.map_or_else(
+        || "time unknown".to_string(),
+        |at| format::datetime(at)[5..16].to_string(),
+    )
+}
+
+/// A ticket's state for the tables: listed, held, or how it ended (when and by whom).
+fn ticket_status(row: &TicketRow, me: &anchor_lang::prelude::Pubkey) -> (String, Style) {
+    let who = |key: &anchor_lang::prelude::Pubkey| {
+        if key == me {
+            "you".to_string()
+        } else {
+            format::short(key)
+        }
+    };
+    match (&row.live, row.fate()) {
+        (Some(ticket), _) => match ticket.listing() {
+            Some((_, price)) => (
+                format!("Listed · {} USDC", format::usdc(price)),
+                theme::ok(),
+            ),
+            None => ("Held".to_string(), theme::text()),
+        },
+        (None, Fate::Redeemed { scanner, at, .. }) => (
+            format!("Redeemed {} · by {}", short_time(at), who(&scanner)),
+            theme::accent(),
+        ),
+        (None, Fate::Refunded { at }) => (format!("Refunded {}", short_time(at)), theme::warn()),
+        (None, Fate::Closed { at }) => (format!("Closed {}", short_time(at)), theme::muted()),
+        (None, Fate::Live) => ("Gone".to_string(), theme::muted()),
+    }
+}
+
 fn draw_door<C: Chain>(frame: &mut Frame, area: Rect, app: &App<C>) {
-    let [verdict, log] = Layout::vertical([Constraint::Min(12), Constraint::Length(8)]).areas(area);
+    let [verdict, log] =
+        Layout::vertical([Constraint::Min(14), Constraint::Percentage(40)]).areas(area);
     let focused = app.modal.is_none();
 
     let mut lines: Vec<Line> = Vec::new();
@@ -487,37 +531,45 @@ fn draw_door<C: Chain>(frame: &mut Frame, area: Rect, app: &App<C>) {
         verdict,
     );
 
-    let items: Vec<ListItem> = if app.scans.is_empty() {
+    let redeems = app.my_redeems();
+    let loading = app.redeems_loading();
+    let items: Vec<ListItem> = if redeems.is_empty() {
         vec![ListItem::new(Line::styled(
-            "No tickets redeemed yet this session.",
+            if loading {
+                "Loading your redeems…"
+            } else {
+                "You haven't redeemed any tickets yet."
+            },
             theme::muted(),
         ))]
     } else {
-        app.scans
+        redeems
             .iter()
-            .map(|scan| {
+            .map(|redeem| {
                 ListItem::new(Line::from(vec![
+                    Span::styled(short_time(redeem.at), theme::muted()),
+                    Span::styled(format!("  {:<30}", redeem.ticket), theme::text()),
+                    Span::styled(format!("{:<24}", redeem.event), theme::muted()),
                     Span::styled(
-                        format::datetime(scan.time)[11..16].to_string(),
+                        redeem
+                            .holder
+                            .map_or_else(String::new, |holder| format::short(&holder)),
                         theme::muted(),
                     ),
-                    Span::styled(format!("  {:<28}", scan.ticket), theme::text()),
-                    Span::styled(format::short(&scan.holder), theme::muted()),
                     Span::styled(
-                        format!("  {}…", &scan.signature.to_string()[..8]),
+                        format!("  {}…", redeem.signature.get(..8).unwrap_or("")),
                         theme::muted(),
                     ),
                 ]))
             })
             .collect()
     };
-    frame.render_widget(
-        List::new(items).block(block(
-            &format!("Redeemed this session ({})", app.scans.len()),
-            false,
-        )),
-        log,
+    let title = format!(
+        "Redeemed by you ({}) · newest first{}",
+        redeems.len(),
+        if loading { " · loading…" } else { "" }
     );
+    frame.render_widget(List::new(items).block(block(&title, false)), log);
 }
 
 fn log_status(entry: &LogEntry) -> (&'static str, Style) {

@@ -176,7 +176,7 @@ Clean up at the end: `tmux kill-session -t <name>` for each actor.
 | `→`, `↑↓`, `PgUp`/`PgDn`, `Home`/`End`, `←` | Log | scroll the details and program logs · back to the list |
 | `Tab`/`↓`, `Ctrl+S`, `Ctrl+U`, `Esc` | forms | next field · submit · clear field · cancel |
 
-**Tab contents:** Organizer shows only this wallet's events and all their tickets. Minter shows all events and this wallet's tickets. Buyer shows listings plus this wallet's tickets. Scanner shows only events where this wallet is a scanner. Log shows every transaction this wallet sent from the app, also saved to `~/.local/share/frostpass/devnet/log-<wallet>.jsonl` (`$FROSTPASS_DATA` overrides the folder).
+**Tab contents:** Organizer shows only this wallet's events and all their tickets, including burned ones. Minter shows all events and this wallet's tickets, including ones burned while it held them. Buyer shows listings plus this wallet's tickets. Every ticket table has a **Status** column: Held, Listed · price, or how it ended (Redeemed · when · by which scanner, Refunded, Closed); burned tickets come from the event's transaction history, loaded in the background (the title says "loading history…" meanwhile) and cached. Scanner shows only events where this wallet is a scanner, and every ticket this wallet has ever redeemed, newest first. Log shows every transaction this wallet sent from the app, also saved to `~/.local/share/frostpass/devnet/log-<wallet>.jsonl` (`$FROSTPASS_DATA` overrides the folder).
 
 **Create-event form fields, in order:** Name · Metadata URI · Ticket price (USDC) · Supply · Resale cap (%) · Royalty (%) · Sales end · Event ends · Scanners (comma-separated) · Event ID (pre-filled random). Times accept `+90m`, `+2h`, `+3d` or `YYYY-MM-DD HH:MM` (UTC). Nothing fetches the metadata URI; any placeholder like `https://example.com/qa.json` works.
 
@@ -229,6 +229,7 @@ Door pass and redeem (ticket #1, now buyer 2's):
 - [ ] Paste it into the **holder's** Scanner tab (the holder isn't a scanner): the tab shows no events, and the Door shows **REFUSE** with "Scanner: this wallet isn't a scanner of the event".
 - [ ] Paste it into **scanner**: **ADMIT** with five ✓ (signature, scanner, event status, freshness, ownership). `Enter` → confirm → redeemed; "Redeemed this session (1)" lists it. The ticket disappears everywhere after refresh; buyer 2's SOL rises by the rents; the scanner's SOL drops only by the fee.
 - [ ] Paste the **same pass again** → REFUSE ("Ticket: no ticket at … redeemed …").
+- [ ] Ticket #1 stays listed everywhere it belongs, as **Redeemed · <time> · by <scanner>**: in the organizer's All tickets, and in buyer 2's Your tickets (its holder at the door). `p`/`l`/`x` on it → "… is redeemed: there's nothing left to do with it". The scanner's "Redeemed by you" list shows it, and still does after quitting and restarting the app.
 - [ ] Wait > 60s with a fresh pass for another ticket, then paste → REFUSE, freshness ✗ ("expired").
 - [ ] Tamper: change one character in the middle of a pass and paste → REFUSE (signature ✗) or "the pass is damaged".
 
@@ -250,6 +251,7 @@ Organizer: `n`, Name `QA Cancel`, price `1`, supply `1`, cap `10`, royalty `5`, 
 - [ ] Holder: mint → `[EventCancelled]`; pass → `[EventCancelled]`; list → `[EventCancelled]`.
 - [ ] Organizer selects the holder's ticket (`→`, then select) and `f` → confirm shows refund 1.00 USDC to the holder, "the mint fee isn't refunded" → refunded. Holder USDC +1.00; organizer −1.00; the ticket is gone. (The organizer can afford it from earlier mint proceeds; if not, the app blocks with `[InsufficientUsdc]`.)
 - [ ] `c` again → `[EventCancelled]` ("already cancelled").
+- [ ] The refunded ticket shows as **Refunded** in the organizer's table and the holder's; QA Short's closed ticket shows as **Closed** for the organizer and the buyer.
 
 ### Ordering, search and the log
 

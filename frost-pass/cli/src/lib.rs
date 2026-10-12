@@ -9,6 +9,7 @@ pub mod actions;
 pub mod chain;
 pub mod checks;
 pub mod format;
+pub mod history;
 pub mod model;
 pub mod pass;
 pub mod store;

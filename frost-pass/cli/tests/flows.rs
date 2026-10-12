@@ -20,9 +20,11 @@ use std::collections::HashMap;
 
 use frost_pass_cli::{
     actions::{self, Plan},
-    chain::{Chain, Filter, TxDetails, TxError},
+    chain::{Chain, Filter, RawInstruction, SignatureInfo, TxDetails, TxError, TxRecord},
     checks::{NewEvent, Violation},
-    format, model,
+    format,
+    history::{self, Fate, History},
+    model,
     pass::Pass,
 };
 use frost_pass_client::usdc_ata;
@@ -49,6 +51,8 @@ struct SvmChain {
     /// The "slot" each account first appeared in, for [`Chain::first_slot`].
     first_seen: HashMap<Pubkey, u64>,
     details: HashMap<Signature, TxDetails>,
+    /// Every landed transaction, oldest first, with the accounts it touched.
+    landed: Vec<(TxRecord, Vec<Pubkey>)>,
 }
 
 impl Chain for SvmChain {
@@ -92,6 +96,7 @@ impl Chain for SvmChain {
         let size = 1 + 64 * transaction.signatures.len() + transaction.message.serialize().len();
         assert!(size <= PACKET_DATA_SIZE, "transaction is {size} bytes");
         let keys = transaction.message.account_keys.clone();
+        let compiled = transaction.message.instructions.clone();
         let (sol_before, usdc_before) = (self.account(&payer).unwrap(), self.usdc(&payer));
         let meta = self
             .svm
@@ -101,6 +106,38 @@ impl Chain for SvmChain {
                 logs: failed.meta.logs,
             })?;
         self.sent += 1;
+        let raw = |program: u8, accounts: &[u8], data: &[u8]| RawInstruction {
+            program: keys[program as usize],
+            accounts: accounts.iter().map(|&i| keys[i as usize]).collect(),
+            data: data.to_vec(),
+            inner: Vec::new(),
+        };
+        let instructions = compiled
+            .iter()
+            .enumerate()
+            .map(|(index, ix)| RawInstruction {
+                inner: meta
+                    .inner_instructions
+                    .get(index)
+                    .into_iter()
+                    .flatten()
+                    .map(|inner| {
+                        let ix = &inner.instruction;
+                        raw(ix.program_id_index, &ix.accounts, &ix.data)
+                    })
+                    .collect(),
+                ..raw(ix.program_id_index, &ix.accounts, &ix.data)
+            })
+            .collect();
+        self.landed.push((
+            TxRecord {
+                signature: meta.signature,
+                slot: self.sent,
+                block_time: Some(self.now().unwrap()),
+                instructions,
+            },
+            keys.clone(),
+        ));
         for key in keys {
             if self.account(&key).unwrap().is_some() {
                 self.first_seen.entry(key).or_insert(self.sent);
@@ -133,6 +170,34 @@ impl Chain for SvmChain {
     fn first_slot(&self, address: &Pubkey) -> anyhow::Result<Option<u64>> {
         Ok(self.first_seen.get(address).copied())
     }
+
+    fn signatures(
+        &self,
+        address: &Pubkey,
+        until: Option<&Signature>,
+    ) -> anyhow::Result<Vec<SignatureInfo>> {
+        Ok(self
+            .landed
+            .iter()
+            .rev()
+            .take_while(|(record, _)| Some(&record.signature) != until)
+            .filter(|(_, keys)| keys.contains(address))
+            .map(|(record, _)| SignatureInfo {
+                signature: record.signature,
+                slot: record.slot,
+                block_time: record.block_time,
+                failed: false,
+            })
+            .collect())
+    }
+
+    fn record(&self, signature: &Signature) -> anyhow::Result<Option<TxRecord>> {
+        Ok(self
+            .landed
+            .iter()
+            .find(|(record, _)| record.signature == *signature)
+            .map(|(record, _)| record.clone()))
+    }
 }
 
 impl SvmChain {
@@ -162,6 +227,7 @@ impl SvmChain {
             sent: 0,
             first_seen: HashMap::new(),
             details: HashMap::new(),
+            landed: Vec::new(),
         };
         chain.write_token_account(USDC_MINT, mint);
         chain.set_usdc(&PROTOCOL_TREASURY, 0);
@@ -562,6 +628,20 @@ fn cancelled_event_refunds_and_ended_event_closes() {
         model::ticket(&chain, &kept).is_err(),
         "the closed ticket is burned"
     );
+
+    // Both live on in the event's history, with how they ended and who held them
+    let mut history = History::in_memory();
+    while history.needs_sync() {
+        history.step(&chain, &event).unwrap();
+    }
+    let tickets = history::tickets(history.events());
+    assert!(matches!(tickets[&refunded].fate, Fate::Refunded { .. }));
+    assert!(matches!(tickets[&kept].fate, Fate::Closed { .. }));
+    for asset in [refunded, kept] {
+        assert_eq!(tickets[&asset].holder, Some(holder.pubkey()));
+    }
+    assert_eq!(tickets[&refunded].number(), Some(1));
+    assert_eq!(tickets[&kept].number(), Some(2));
 }
 
 /// Several tickets mint in one transaction, all or nothing, within the wallet limit and the
@@ -822,9 +902,35 @@ fn the_app_walks_one_wallet_through_every_tab() {
     assert!(screen(&mut app).contains("Redeem ticket"));
     press(&mut app, KeyCode::Char('y'));
     let door = screen(&mut app);
-    assert!(door.contains("Redeemed this session (1)"), "{door}");
+    assert!(
+        door.contains("Redeemed by you (1)") && door.contains("Coldplay Devnet Tour #1"),
+        "{door}"
+    );
     assert!(
         model::ticket(&app.chain, &ticket).is_err(),
         "the ticket is burned"
     );
+
+    // The burned ticket stays visible, with how it ended: for its holder...
+    press(&mut app, KeyCode::Char('2'));
+    let holder = screen(&mut app);
+    assert!(
+        holder.contains("Your tickets (3)")
+            && holder.contains("Redeemed")
+            && holder.contains("by you"),
+        "{holder}"
+    );
+    // ...nothing more can be done with it...
+    press(&mut app, KeyCode::Char('p'));
+    assert!(screen(&mut app).contains("is redeemed: there's nothing left to do with it"));
+
+    // ...and for the organizer, with every other ticket
+    let mut organizer_app = App::new(app.chain, organizer, "litesvm".into()).without_animation();
+    press(&mut organizer_app, KeyCode::Char('1'));
+    let all = screen(&mut organizer_app);
+    assert!(
+        all.contains("All tickets (3)") && all.contains("Redeemed"),
+        "{all}"
+    );
+    assert_eq!(all.matches("Held").count(), 2, "{all}");
 }

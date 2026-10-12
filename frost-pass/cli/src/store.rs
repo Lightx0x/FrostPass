@@ -56,7 +56,7 @@ fn folder_name(cluster: &str) -> String {
 
 /// Writes `contents` to `path` via a temporary file and a rename, so readers never see half a
 /// file.
-fn write_atomic(path: &Path, contents: &str) -> Result<()> {
+pub(crate) fn write_atomic(path: &Path, contents: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("couldn't create {}", parent.display()))?;

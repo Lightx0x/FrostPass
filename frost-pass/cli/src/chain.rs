@@ -20,7 +20,9 @@ use solana_signature::Signature;
 use solana_signer::Signer;
 use solana_transaction::Transaction;
 use solana_transaction_status_client_types::{
-    TransactionConfirmationStatus, UiTransactionEncoding, UiTransactionTokenBalance,
+    option_serializer::OptionSerializer, EncodedTransaction, TransactionConfirmationStatus,
+    UiCompiledInstruction, UiInstruction, UiMessage, UiTransactionEncoding,
+    UiTransactionTokenBalance,
 };
 
 /// The clock sysvar.
@@ -45,6 +47,35 @@ pub struct TxDetails {
     /// Change of the fee payer's USDC in base units (6 decimals).
     pub usdc_change: i64,
     pub logs: Vec<String>,
+}
+
+/// A transaction that touched an address, from [`Chain::signatures`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SignatureInfo {
+    pub signature: Signature,
+    pub slot: u64,
+    pub block_time: Option<i64>,
+    /// It landed but failed: it changed nothing (except the fee).
+    pub failed: bool,
+}
+
+/// One instruction of a landed transaction, with the instructions it invoked.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RawInstruction {
+    pub program: Pubkey,
+    pub accounts: Vec<Pubkey>,
+    pub data: Vec<u8>,
+    /// Instructions this one invoked (CPIs), in order.
+    pub inner: Vec<RawInstruction>,
+}
+
+/// What a landed transaction did, instruction by instruction, for rebuilding ticket histories.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TxRecord {
+    pub signature: Signature,
+    pub slot: u64,
+    pub block_time: Option<i64>,
+    pub instructions: Vec<RawInstruction>,
 }
 
 /// How settled a landed transaction is.
@@ -156,6 +187,20 @@ pub trait Chain {
     /// The slot of the first transaction that touched `address`: for an event, when it was
     /// created. `None` when the cluster can't tell.
     fn first_slot(&self, _address: &Pubkey) -> Result<Option<u64>> {
+        Ok(None)
+    }
+
+    /// Every transaction that touched `address`, newest first, back to (not including) `until`.
+    fn signatures(
+        &self,
+        _address: &Pubkey,
+        _until: Option<&Signature>,
+    ) -> Result<Vec<SignatureInfo>> {
+        Ok(Vec::new())
+    }
+
+    /// The instructions of a landed transaction (`None` if the cluster doesn't serve it yet).
+    fn record(&self, _signature: &Signature) -> Result<Option<TxRecord>> {
         Ok(None)
     }
 
@@ -331,6 +376,77 @@ impl Chain for RpcChain {
             .collect())
     }
 
+    fn signatures(
+        &self,
+        address: &Pubkey,
+        until: Option<&Signature>,
+    ) -> Result<Vec<SignatureInfo>> {
+        let mut all = Vec::new();
+        let mut before = None;
+        loop {
+            let page = self.signatures_page(address, before, until.copied())?;
+            let full = page.len() == MAX_SIGNATURES;
+            before = page.last().map(|entry| entry.signature);
+            all.extend(page);
+            if !full {
+                return Ok(all);
+            }
+        }
+    }
+
+    fn record(&self, signature: &Signature) -> Result<Option<TxRecord>> {
+        let config = RpcTransactionConfig {
+            encoding: Some(UiTransactionEncoding::Json),
+            commitment: Some(self.client.commitment()),
+            max_supported_transaction_version: Some(0),
+        };
+        let Ok(tx) = self.client.get_transaction_with_config(signature, config) else {
+            return Ok(None);
+        };
+        let EncodedTransaction::Json(ui) = tx.transaction.transaction else {
+            return Ok(None);
+        };
+        let UiMessage::Raw(message) = ui.message else {
+            return Ok(None);
+        };
+        let mut keys: Vec<Pubkey> = message
+            .account_keys
+            .iter()
+            .map(|key| key.parse())
+            .collect::<Result<_, _>>()?;
+        let meta = tx.transaction.meta;
+        // Versioned transactions: accounts loaded from lookup tables come after the static ones
+        if let Some(OptionSerializer::Some(loaded)) = meta.as_ref().map(|m| &m.loaded_addresses) {
+            for key in loaded.writable.iter().chain(&loaded.readonly) {
+                keys.push(key.parse()?);
+            }
+        }
+        let mut instructions: Vec<RawInstruction> = message
+            .instructions
+            .iter()
+            .map(|ix| decode_instruction(ix, &keys))
+            .collect::<Option<_>>()
+            .context("unexpected transaction layout")?;
+        if let Some(OptionSerializer::Some(inner)) = meta.map(|m| m.inner_instructions) {
+            for group in inner {
+                let Some(parent) = instructions.get_mut(group.index as usize) else {
+                    continue;
+                };
+                for ix in group.instructions {
+                    if let UiInstruction::Compiled(ix) = ix {
+                        parent.inner.extend(decode_instruction(&ix, &keys));
+                    }
+                }
+            }
+        }
+        Ok(Some(TxRecord {
+            signature: *signature,
+            slot: tx.slot,
+            block_time: tx.block_time,
+            instructions,
+        }))
+    }
+
     fn first_slot(&self, address: &Pubkey) -> Result<Option<u64>> {
         // Newest first: page back until a short page, whose last entry is the oldest
         let mut before = None;
@@ -353,6 +469,53 @@ impl Chain for RpcChain {
             before = Some(oldest.signature.parse()?);
         }
     }
+}
+
+impl RpcChain {
+    fn signatures_page(
+        &self,
+        address: &Pubkey,
+        before: Option<Signature>,
+        until: Option<Signature>,
+    ) -> Result<Vec<SignatureInfo>> {
+        self.client
+            .get_signatures_for_address_with_config(
+                address,
+                GetConfirmedSignaturesForAddress2Config {
+                    before,
+                    until,
+                    limit: Some(MAX_SIGNATURES),
+                    commitment: Some(self.client.commitment()),
+                },
+            )?
+            .into_iter()
+            .map(|entry| {
+                Ok(SignatureInfo {
+                    signature: entry.signature.parse()?,
+                    slot: entry.slot,
+                    block_time: entry.block_time,
+                    failed: entry.err.is_some(),
+                })
+            })
+            .collect()
+    }
+}
+
+fn decode_instruction(
+    instruction: &UiCompiledInstruction,
+    keys: &[Pubkey],
+) -> Option<RawInstruction> {
+    let key = |index: u8| keys.get(index as usize).copied();
+    Some(RawInstruction {
+        program: key(instruction.program_id_index)?,
+        accounts: instruction
+            .accounts
+            .iter()
+            .map(|&index| key(index))
+            .collect::<Option<_>>()?,
+        data: bs58::decode(&instruction.data).into_vec().ok()?,
+        inner: Vec::new(),
+    })
 }
 
 /// How many times to ask for a just-confirmed transaction before giving up (about 3 s).

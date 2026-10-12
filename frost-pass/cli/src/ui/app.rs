@@ -3,7 +3,8 @@
 
 use std::{
     cell::Cell,
-    path::Path,
+    collections::HashMap,
+    path::{Path, PathBuf},
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -21,6 +22,7 @@ use crate::{
     chain::{Chain, TxError},
     checks::{self, NewEvent, Violation},
     format,
+    history::{self, Action, Fate, History, TicketRecord},
     model::{self, EventInfo, TicketInfo},
     pass::Pass,
     store::{LogEntry, SlotCache, TxLog},
@@ -116,6 +118,45 @@ pub struct ScanRecord {
     pub signature: Signature,
 }
 
+/// A row of the tickets table: a live ticket (with its history, once loaded), or a burned one
+/// known only from its history.
+#[derive(Clone)]
+pub struct TicketRow {
+    pub number: Option<u32>,
+    pub name: String,
+    pub asset: Pubkey,
+    /// The owner if it's live, else who held it when it was burned.
+    pub owner: Option<Pubkey>,
+    pub live: Option<TicketInfo>,
+    pub record: Option<TicketRecord>,
+}
+
+impl TicketRow {
+    pub fn fate(&self) -> Fate {
+        match (&self.live, &self.record) {
+            (Some(_), _) | (None, None) => Fate::Live,
+            (None, Some(record)) => record.fate.clone(),
+        }
+    }
+
+    pub fn resales(&self) -> u8 {
+        match (&self.live, &self.record) {
+            (Some(live), _) => live.state.resale_count,
+            (None, Some(record)) => record.resales,
+            (None, None) => 0,
+        }
+    }
+}
+
+/// A ticket this wallet redeemed as a scanner, from its whole history.
+pub struct RedeemRow {
+    pub at: Option<i64>,
+    pub ticket: String,
+    pub event: String,
+    pub holder: Option<Pubkey>,
+    pub signature: String,
+}
+
 enum Job {
     Refresh,
     RefreshLog,
@@ -161,6 +202,9 @@ pub struct App<C: Chain> {
     pub searching: bool,
     /// When each event was created, for listing newest first.
     slots: SlotCache,
+    /// Ticket histories from transactions, per event and for this wallet (see [`history`]).
+    histories: HashMap<Pubkey, History>,
+    data_dir: Option<PathBuf>,
     /// Events whose creation slot the cluster couldn't give; not asked again this run.
     slot_misses: HashSet<Pubkey>,
     /// Some events' creation slots are still being looked up (between key presses), so the
@@ -224,6 +268,8 @@ impl<C: Chain> App<C> {
             search: String::new(),
             searching: false,
             slots: SlotCache::in_memory(),
+            histories: HashMap::new(),
+            data_dir: None,
             slot_misses: HashSet::new(),
             ordering: false,
             log: TxLog::in_memory(),
@@ -242,6 +288,7 @@ impl<C: Chain> App<C> {
     pub fn with_store(mut self, dir: &Path) -> Self {
         self.slots = SlotCache::open(dir);
         self.log = TxLog::open(dir, &self.me());
+        self.data_dir = Some(dir.to_path_buf());
         self
     }
 
@@ -322,22 +369,144 @@ impl<C: Chain> App<C> {
         self.visible_events().get(self.event_index).copied()
     }
 
-    /// Organizers see every ticket, minters their own, buyers listings and their own.
-    pub fn visible_tickets(&self) -> Vec<&TicketInfo> {
-        let me = self.me();
-        self.tickets
-            .iter()
-            .filter(|ticket| match self.tab {
-                Tab::Organizer => true,
-                Tab::Minter => ticket.owner == me,
-                Tab::Buyer => ticket.owner == me || ticket.state.seller.is_some(),
-                Tab::Scanner | Tab::Log => false,
-            })
-            .collect()
+    /// The selected event's tickets as its history tells them, by asset.
+    fn ticket_records(&self) -> HashMap<Pubkey, TicketRecord> {
+        self.selected_event()
+            .and_then(|event| self.histories.get(&event.address))
+            .map(|history| history::tickets(history.events()))
+            .unwrap_or_default()
     }
 
-    pub fn selected_ticket(&self) -> Option<&TicketInfo> {
-        self.visible_tickets().get(self.ticket_index).copied()
+    /// Whether the selected event's history is still loading (burned tickets may be missing).
+    pub fn history_loading(&self) -> bool {
+        self.selected_event().is_some_and(|event| {
+            self.histories
+                .get(&event.address)
+                .is_none_or(History::syncing)
+        })
+    }
+
+    /// Whether this wallet's history (every redeem, for scanners) is still loading.
+    pub fn redeems_loading(&self) -> bool {
+        self.histories.get(&self.me()).is_none_or(History::syncing)
+    }
+
+    /// The tickets table, by number: live tickets and, from the history, burned ones.
+    /// Organizers see every ticket; minters the ones they hold or held when they were burned;
+    /// buyers those plus every listing.
+    pub fn visible_tickets(&self) -> Vec<TicketRow> {
+        let me = self.me();
+        let mut records = self.ticket_records();
+        let mut rows: Vec<TicketRow> = self
+            .tickets
+            .iter()
+            .map(|ticket| TicketRow {
+                number: ticket_number(&ticket.name),
+                name: ticket.name.clone(),
+                asset: ticket.asset,
+                owner: Some(ticket.owner),
+                live: Some(ticket.clone()),
+                record: records.remove(&ticket.asset),
+            })
+            .collect();
+        // What's left and not live anymore was burned
+        rows.extend(
+            records
+                .into_values()
+                .filter(|record| !record.fate.is_live())
+                .map(|record| TicketRow {
+                    number: record.number(),
+                    name: record
+                        .name
+                        .clone()
+                        .unwrap_or_else(|| format!("Ticket {}", format::short(&record.asset))),
+                    asset: record.asset,
+                    owner: record.holder,
+                    live: None,
+                    record: Some(record),
+                }),
+        );
+        rows.retain(|row| match self.tab {
+            Tab::Organizer => true,
+            Tab::Minter => row.owner == Some(me),
+            Tab::Buyer => {
+                row.owner == Some(me)
+                    || row
+                        .live
+                        .as_ref()
+                        .is_some_and(|ticket| ticket.state.seller.is_some())
+            }
+            Tab::Scanner | Tab::Log => false,
+        });
+        rows.sort_by_key(|row| (row.number.is_none(), row.number));
+        rows
+    }
+
+    pub fn selected_row(&self) -> Option<TicketRow> {
+        self.visible_tickets().into_iter().nth(self.ticket_index)
+    }
+
+    /// The selected ticket, if it still exists.
+    pub fn selected_ticket(&self) -> Option<TicketInfo> {
+        self.selected_row().and_then(|row| row.live)
+    }
+
+    /// Every ticket this wallet redeemed as a scanner, newest first: its whole history, plus
+    /// this session's redeems the history hasn't caught up with yet.
+    pub fn my_redeems(&self) -> Vec<RedeemRow> {
+        let me = self.me().to_string();
+        let mut rows: Vec<RedeemRow> = self
+            .histories
+            .get(&self.me())
+            .into_iter()
+            .flat_map(History::events)
+            .filter_map(|event| match &event.action {
+                Action::Redeemed { scanner, holder } if *scanner == me => Some(RedeemRow {
+                    at: event.block_time,
+                    ticket: self.ticket_name(event.event(), event.asset()),
+                    event: self.event_name(event.event()),
+                    holder: holder.parse().ok(),
+                    signature: event.signature.clone(),
+                }),
+                _ => None,
+            })
+            .collect();
+        for scan in &self.scans {
+            let signature = scan.signature.to_string();
+            if !rows.iter().any(|row| row.signature == signature) {
+                rows.push(RedeemRow {
+                    at: Some(scan.time),
+                    ticket: scan.ticket.clone(),
+                    event: String::new(),
+                    holder: Some(scan.holder),
+                    signature,
+                });
+            }
+        }
+        rows.sort_by_key(|row| std::cmp::Reverse(row.at));
+        rows
+    }
+
+    fn event_name(&self, event: Option<Pubkey>) -> String {
+        let Some(event) = event else {
+            return String::new();
+        };
+        self.events
+            .iter()
+            .find(|e| e.address == event)
+            .map_or_else(|| format::short(&event), |e| e.name.clone())
+    }
+
+    /// A redeemed ticket's name, from its event's history (loaded in the background).
+    fn ticket_name(&self, event: Option<Pubkey>, asset: Option<Pubkey>) -> String {
+        let (Some(event), Some(asset)) = (event, asset) else {
+            return "Ticket".into();
+        };
+        self.histories
+            .get(&event)
+            .and_then(|history| history::tickets(history.events()).remove(&asset))
+            .and_then(|record| record.name)
+            .unwrap_or_else(|| format!("Ticket {}", format::short(&asset)))
     }
 
     // -----------------------------------------------------------------------
@@ -498,7 +667,14 @@ impl<C: Chain> App<C> {
         let event = self.selected_event().map(|e| e.address);
         let ticket = self.selected_ticket().map(|t| t.asset);
         let need_event = "Select an event first";
-        let need_ticket = "Select a ticket first (→ to move to the tickets pane)";
+        let need_ticket = &match self.selected_row() {
+            Some(row) if row.live.is_none() => format!(
+                "{} is {}: there's nothing left to do with it",
+                row.name,
+                fate_word(&row.fate())
+            ),
+            _ => "Select a ticket first (→ to move to the tickets pane)".to_string(),
+        };
         match (self.tab, code) {
             // Organizer
             (Tab::Organizer, KeyCode::Char('n')) => {
@@ -529,7 +705,7 @@ impl<C: Chain> App<C> {
 
             // Buyer
             (Tab::Buyer, KeyCode::Char('b')) => match self.selected_ticket() {
-                Some(ticket) => self.modal = Some(Modal::Form(buy_form(ticket))),
+                Some(ticket) => self.modal = Some(Modal::Form(buy_form(&ticket))),
                 None => self.error(need_ticket),
             },
 
@@ -537,7 +713,7 @@ impl<C: Chain> App<C> {
             (Tab::Minter | Tab::Buyer, KeyCode::Char('l')) => {
                 match (self.selected_event(), self.selected_ticket()) {
                     (Some(event), Some(ticket)) => {
-                        self.modal = Some(Modal::Form(list_form(event, ticket)))
+                        self.modal = Some(Modal::Form(list_form(event, &ticket)))
                     }
                     _ => self.error(need_ticket),
                 }
@@ -766,7 +942,41 @@ impl<C: Chain> App<C> {
         self.event_index = selected
             .and_then(|address| events.iter().position(|e| e.address == address))
             .unwrap_or(self.event_index.min(events.len().saturating_sub(1)));
+        // Pick up transactions since the histories were last listed
+        for history in self.histories.values_mut() {
+            history.rescan();
+        }
         self.load_tickets()
+    }
+
+    /// Addresses whose history the current view needs: the selected event's, and on the
+    /// Scanner tab this wallet's (every redeem) plus the events of those redeems (for names).
+    fn history_targets(&self) -> Vec<Pubkey> {
+        let mut targets = Vec::new();
+        if self.tab != Tab::Log {
+            targets.extend(self.selected_event().map(|event| event.address));
+        }
+        if self.tab == Tab::Scanner {
+            let me = self.me();
+            targets.push(me);
+            if let Some(mine) = self.histories.get(&me) {
+                for event in mine.events() {
+                    if let (Action::Redeemed { .. }, Some(address)) = (&event.action, event.event())
+                    {
+                        if !targets.contains(&address) {
+                            targets.push(address);
+                        }
+                    }
+                }
+            }
+        }
+        targets
+    }
+
+    fn history_work(&self) -> Option<Pubkey> {
+        self.history_targets()
+            .into_iter()
+            .find(|address| self.histories.get(address).is_none_or(History::needs_sync))
     }
 
     /// Sorts events newest first by the slot they were created in, as far as it's known. Unknown
@@ -789,10 +999,34 @@ impl<C: Chain> App<C> {
     /// Background work for when no key is pressed: looks up one event's creation slot (a single
     /// RPC call, so input never waits long) and re-sorts, keeping the selection.
     pub fn has_idle_work(&self) -> bool {
-        self.ordering && self.pending.is_none()
+        self.pending.is_none() && (self.ordering || self.history_work().is_some())
     }
 
+    /// One step of background work: event order first (it decides which event is on top),
+    /// then the histories the view needs.
     pub fn run_idle(&mut self) {
+        if self.ordering {
+            self.order_step();
+            return;
+        }
+        let Some(address) = self.history_work() else {
+            return;
+        };
+        let dir = self.data_dir.clone();
+        let history = self.histories.entry(address).or_insert_with(|| match &dir {
+            Some(dir) => History::open(dir, &address),
+            None => History::in_memory(),
+        });
+        // Rate limited or offline: stop until the next refresh
+        if history.step(&self.chain, &address).is_err() {
+            history.stall();
+        }
+        self.ticket_index = self
+            .ticket_index
+            .min(self.visible_tickets().len().saturating_sub(1));
+    }
+
+    fn order_step(&mut self) {
         let Some(address) = self.next_unknown_slot() else {
             self.ordering = false;
             return;
@@ -1072,7 +1306,7 @@ impl<C: Chain> App<C> {
         if let Some(index) = self
             .visible_tickets()
             .iter()
-            .position(|t| t.asset == created)
+            .position(|row| row.asset == created)
         {
             self.ticket_index = index;
             self.pane = Pane::Tickets;
@@ -1092,6 +1326,21 @@ impl<C: Chain> App<C> {
         }));
         self.done("Pass ready: show it at the door");
         Ok(())
+    }
+}
+
+/// The number at the end of a ticket's name (`"Gig #3"` → 3).
+fn ticket_number(name: &str) -> Option<u32> {
+    name.rsplit('#').next()?.trim().parse().ok()
+}
+
+/// How a ticket ended, in a word.
+pub fn fate_word(fate: &Fate) -> &'static str {
+    match fate {
+        Fate::Live => "live",
+        Fate::Redeemed { .. } => "redeemed",
+        Fate::Refunded { .. } => "refunded",
+        Fate::Closed { .. } => "closed",
     }
 }
 

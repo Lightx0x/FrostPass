@@ -1030,6 +1030,26 @@ fn footer(keys: &[(&str, &str)]) -> Line<'static> {
     Line::from(spans)
 }
 
+/// The text cursor in form fields.
+const CURSOR: char = '▏';
+
+/// Splits the span holding [`CURSOR`] so the cursor shows in the accent.
+fn cursor_in_accent(line: Line<'static>) -> Line<'static> {
+    let mut spans = Vec::with_capacity(line.spans.len() + 2);
+    for span in line.spans {
+        match span.content.split_once(CURSOR) {
+            Some((before, after)) => {
+                let (before, after) = (before.to_string(), after.to_string());
+                spans.push(Span::styled(before, span.style));
+                spans.push(Span::styled(CURSOR.to_string(), theme::accent()));
+                spans.push(Span::styled(after, span.style));
+            }
+            None => spans.push(span),
+        }
+    }
+    Line::from(spans)
+}
+
 const FORM_WIDTH: u16 = 84;
 
 fn draw_form(frame: &mut Frame, form: &Form) {
@@ -1049,11 +1069,22 @@ fn draw_form(frame: &mut Frame, form: &Form) {
                 },
             ),
         ];
-        let mut rows = hanging_lines(lead, &field.value, theme::strong(), width);
+        let mut rows = if focused {
+            // The cursor sits where typing goes; wrap it with the text, then colour it
+            let mut value = field.value.clone();
+            let at = value
+                .char_indices()
+                .nth(field.cursor)
+                .map_or(value.len(), |(byte, _)| byte);
+            value.insert(at, CURSOR);
+            hanging_lines(lead, &value, theme::strong(), width)
+                .into_iter()
+                .map(cursor_in_accent)
+                .collect()
+        } else {
+            hanging_lines(lead, &field.value, theme::strong(), width)
+        };
         if focused {
-            if let Some(last) = rows.last_mut() {
-                last.push_span(Span::styled("▏", theme::accent()));
-            }
             rows.extend(hanging_lines(
                 vec![Span::raw(" ".repeat(label_width + 2))],
                 &field.hint,
@@ -1076,9 +1107,11 @@ fn draw_form(frame: &mut Frame, form: &Form) {
         lines,
         &[
             ("Tab/↓", "next"),
+            ("←→ Home End", "move"),
+            ("Ctrl+⌫", "delete word"),
+            ("Ctrl+U", "clear"),
             ("Enter", "next / submit"),
             ("Ctrl+S", "submit"),
-            ("Ctrl+U", "clear"),
             ("Esc", "cancel"),
         ],
         FORM_WIDTH,

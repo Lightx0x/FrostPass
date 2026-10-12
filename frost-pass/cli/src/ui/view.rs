@@ -531,41 +531,59 @@ fn draw_door<C: Chain>(frame: &mut Frame, area: Rect, app: &App<C>) {
         verdict,
     );
 
-    let redeems = app.my_redeems();
-    let loading = app.redeems_loading();
-    let items: Vec<ListItem> = if redeems.is_empty() {
-        vec![ListItem::new(Line::styled(
+    // The event's door log: every redeem, by every scanner
+    let redeems = app.event_redeems();
+    let loading = app.history_loading();
+    let me = app.me();
+    let who = |key: Option<anchor_lang::prelude::Pubkey>| match key {
+        Some(key) if key == me => Span::styled(format!("{:<12}", "you"), theme::accent()),
+        Some(key) => Span::styled(format!("{:<12}", format::short(&key)), theme::text()),
+        None => Span::styled(format!("{:<12}", "—"), theme::muted()),
+    };
+    let mut items: Vec<ListItem> = Vec::new();
+    if redeems.is_empty() {
+        items.push(ListItem::new(Line::styled(
             if loading {
-                "Loading your redeems…"
+                "Loading the door log…"
+            } else if app.selected_event().is_some() {
+                "No tickets redeemed at this event yet."
             } else {
-                "You haven't redeemed any tickets yet."
+                "Select an event to see its door log."
             },
             theme::muted(),
-        ))]
+        )));
     } else {
-        redeems
-            .iter()
-            .map(|redeem| {
-                ListItem::new(Line::from(vec![
-                    Span::styled(short_time(redeem.at), theme::muted()),
-                    Span::styled(format!("  {:<30}", redeem.ticket), theme::text()),
-                    Span::styled(format!("{:<24}", redeem.event), theme::muted()),
-                    Span::styled(
+        items.push(ListItem::new(Line::styled(
+            format!(
+                "{:<13}{:<8}{:<12}{:<12}{}",
+                "Time (UTC)", "Ticket", "Scanner", "Holder", "Signature"
+            ),
+            theme::muted().add_modifier(Modifier::BOLD),
+        )));
+        items.extend(redeems.iter().map(|redeem| {
+            ListItem::new(Line::from(vec![
+                Span::styled(format!("{:<13}", short_time(redeem.at)), theme::muted()),
+                Span::styled(
+                    format!(
+                        "{:<8}",
                         redeem
-                            .holder
-                            .map_or_else(String::new, |holder| format::short(&holder)),
-                        theme::muted(),
+                            .number
+                            .map_or_else(|| "?".to_string(), |n| format!("#{n}"))
                     ),
-                    Span::styled(
-                        format!("  {}…", redeem.signature.get(..8).unwrap_or("")),
-                        theme::muted(),
-                    ),
-                ]))
-            })
-            .collect()
-    };
+                    theme::strong(),
+                ),
+                who(redeem.scanner),
+                who(redeem.holder),
+                Span::styled(
+                    format!("{}…", redeem.signature.get(..8).unwrap_or("")),
+                    theme::muted(),
+                ),
+            ]))
+        }));
+    }
     let title = format!(
-        "Redeemed by you ({}) · newest first{}",
+        "Door log · {} redeemed ({}) · newest first{}",
+        app.selected_event().map_or("", |e| e.name.as_str()),
         redeems.len(),
         if loading { " · loading…" } else { "" }
     );

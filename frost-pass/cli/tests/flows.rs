@@ -903,7 +903,8 @@ fn the_app_walks_one_wallet_through_every_tab() {
     press(&mut app, KeyCode::Char('y'));
     let door = screen(&mut app);
     assert!(
-        door.contains("Redeemed by you (1)") && door.contains("Coldplay Devnet Tour #1"),
+        door.contains("Door log · Coldplay Devnet Tour redeemed (1)")
+            && door.contains("#1      you"),
         "{door}"
     );
     assert!(

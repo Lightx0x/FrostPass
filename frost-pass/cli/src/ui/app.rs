@@ -22,7 +22,7 @@ use crate::{
     chain::{Chain, TxError},
     checks::{self, NewEvent, Violation},
     format,
-    history::{self, Action, Fate, History, TicketRecord},
+    history::{self, Fate, History, TicketRecord},
     model::{self, EventInfo, TicketInfo},
     pass::Pass,
     store::{LogEntry, SlotCache, TxLog},
@@ -93,7 +93,11 @@ pub struct Confirm {
 /// Follow-up once a confirmed transaction lands.
 enum After {
     Nothing,
-    Scanned { ticket: String, holder: Pubkey },
+    Scanned {
+        ticket: String,
+        holder: Pubkey,
+        event: Option<Pubkey>,
+    },
 }
 
 pub struct PassView {
@@ -115,6 +119,7 @@ pub struct ScanRecord {
     pub time: i64,
     pub ticket: String,
     pub holder: Pubkey,
+    pub event: Option<Pubkey>,
     pub signature: Signature,
 }
 
@@ -148,11 +153,12 @@ impl TicketRow {
     }
 }
 
-/// A ticket this wallet redeemed as a scanner, from its whole history.
+/// A ticket redeemed at the door of an event, by any of its scanners.
 pub struct RedeemRow {
     pub at: Option<i64>,
+    pub number: Option<u32>,
     pub ticket: String,
-    pub event: String,
+    pub scanner: Option<Pubkey>,
     pub holder: Option<Pubkey>,
     pub signature: String,
 }
@@ -386,11 +392,6 @@ impl<C: Chain> App<C> {
         })
     }
 
-    /// Whether this wallet's history (every redeem, for scanners) is still loading.
-    pub fn redeems_loading(&self) -> bool {
-        self.histories.get(&self.me()).is_none_or(History::syncing)
-    }
-
     /// The tickets table, by number: live tickets and, from the history, burned ones.
     /// Organizers see every ticket; minters the ones they hold or held when they were burned;
     /// buyers those plus every listing.
@@ -451,62 +452,48 @@ impl<C: Chain> App<C> {
         self.selected_row().and_then(|row| row.live)
     }
 
-    /// Every ticket this wallet redeemed as a scanner, newest first: its whole history, plus
-    /// this session's redeems the history hasn't caught up with yet.
-    pub fn my_redeems(&self) -> Vec<RedeemRow> {
-        let me = self.me().to_string();
+    /// The door log of the selected event: every ticket redeemed there, by any of its scanners,
+    /// newest first. It comes from the event's history, so every scanner sees the same list;
+    /// this session's redeems show at once, before the history catches up.
+    pub fn event_redeems(&self) -> Vec<RedeemRow> {
         let mut rows: Vec<RedeemRow> = self
-            .histories
-            .get(&self.me())
-            .into_iter()
-            .flat_map(History::events)
-            .filter_map(|event| match &event.action {
-                Action::Redeemed { scanner, holder } if *scanner == me => Some(RedeemRow {
-                    at: event.block_time,
-                    ticket: self.ticket_name(event.event(), event.asset()),
-                    event: self.event_name(event.event()),
-                    holder: holder.parse().ok(),
-                    signature: event.signature.clone(),
+            .ticket_records()
+            .into_values()
+            .filter_map(|record| match record.fate.clone() {
+                Fate::Redeemed {
+                    scanner,
+                    at,
+                    signature,
+                } => Some(RedeemRow {
+                    at,
+                    number: record.number(),
+                    ticket: record
+                        .name
+                        .clone()
+                        .unwrap_or_else(|| format!("Ticket {}", format::short(&record.asset))),
+                    scanner: Some(scanner),
+                    holder: record.holder,
+                    signature,
                 }),
                 _ => None,
             })
             .collect();
-        for scan in &self.scans {
+        let event = self.selected_event().map(|e| e.address);
+        for scan in self.scans.iter().filter(|scan| scan.event == event) {
             let signature = scan.signature.to_string();
             if !rows.iter().any(|row| row.signature == signature) {
                 rows.push(RedeemRow {
                     at: Some(scan.time),
+                    number: ticket_number(&scan.ticket),
                     ticket: scan.ticket.clone(),
-                    event: String::new(),
+                    scanner: Some(self.me()),
                     holder: Some(scan.holder),
                     signature,
                 });
             }
         }
-        rows.sort_by_key(|row| std::cmp::Reverse(row.at));
+        rows.sort_by_key(|row| std::cmp::Reverse((row.at, row.number)));
         rows
-    }
-
-    fn event_name(&self, event: Option<Pubkey>) -> String {
-        let Some(event) = event else {
-            return String::new();
-        };
-        self.events
-            .iter()
-            .find(|e| e.address == event)
-            .map_or_else(|| format::short(&event), |e| e.name.clone())
-    }
-
-    /// A redeemed ticket's name, from its event's history (loaded in the background).
-    fn ticket_name(&self, event: Option<Pubkey>, asset: Option<Pubkey>) -> String {
-        let (Some(event), Some(asset)) = (event, asset) else {
-            return "Ticket".into();
-        };
-        self.histories
-            .get(&event)
-            .and_then(|history| history::tickets(history.events()).remove(&asset))
-            .and_then(|record| record.name)
-            .unwrap_or_else(|| format!("Ticket {}", format::short(&asset)))
     }
 
     // -----------------------------------------------------------------------
@@ -949,28 +936,17 @@ impl<C: Chain> App<C> {
         self.load_tickets()
     }
 
-    /// Addresses whose history the current view needs: the selected event's, and on the
-    /// Scanner tab this wallet's (every redeem) plus the events of those redeems (for names).
+    /// Addresses whose history the current view needs: the selected event's (its tickets'
+    /// statuses, and the door log on the Scanner tab).
     fn history_targets(&self) -> Vec<Pubkey> {
-        let mut targets = Vec::new();
-        if self.tab != Tab::Log {
-            targets.extend(self.selected_event().map(|event| event.address));
+        match self.tab {
+            Tab::Log => Vec::new(),
+            _ => self
+                .selected_event()
+                .map(|e| e.address)
+                .into_iter()
+                .collect(),
         }
-        if self.tab == Tab::Scanner {
-            let me = self.me();
-            targets.push(me);
-            if let Some(mine) = self.histories.get(&me) {
-                for event in mine.events() {
-                    if let (Action::Redeemed { .. }, Some(address)) = (&event.action, event.event())
-                    {
-                        if !targets.contains(&address) {
-                            targets.push(address);
-                        }
-                    }
-                }
-            }
-        }
-        targets
     }
 
     fn history_work(&self) -> Option<Pubkey> {
@@ -1237,6 +1213,7 @@ impl<C: Chain> App<C> {
                         .as_ref()
                         .map_or_else(String::new, |t| t.name.clone()),
                     holder: report.pass.user,
+                    event: report.event.as_ref().map(|e| e.address),
                 };
                 (plan, None, after)
             }
@@ -1262,13 +1239,19 @@ impl<C: Chain> App<C> {
         }
         let logged = self.log.push(entry);
         let receipt = result?;
-        if let After::Scanned { ticket, holder } = confirm.after {
+        if let After::Scanned {
+            ticket,
+            holder,
+            event,
+        } = confirm.after
+        {
             self.scans.insert(
                 0,
                 ScanRecord {
                     time: self.now(),
                     ticket,
                     holder,
+                    event,
                     signature: receipt.signature,
                 },
             );

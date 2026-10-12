@@ -4,7 +4,7 @@
 use std::{
     cell::Cell,
     path::Path,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
 use anchor_lang::prelude::Pubkey;
@@ -177,6 +177,8 @@ pub struct App<C: Chain> {
     /// What to copy (`"Pass"`) and the text; the run loop copies it, then calls [`Self::copied`].
     pub clipboard: Option<(&'static str, String)>,
     pub quit: bool,
+    /// When the app started, for the logo's animation; `None` keeps it still.
+    animation_start: Option<Instant>,
 }
 
 fn local_now() -> i64 {
@@ -232,6 +234,7 @@ impl<C: Chain> App<C> {
             pending: Some(Job::Refresh),
             clipboard: None,
             quit: false,
+            animation_start: Some(Instant::now()),
         }
     }
 
@@ -240,6 +243,18 @@ impl<C: Chain> App<C> {
         self.slots = SlotCache::open(dir);
         self.log = TxLog::open(dir, &self.me());
         self
+    }
+
+    /// Keeps the logo still (`--no-animation`, and the tests).
+    pub fn without_animation(mut self) -> Self {
+        self.animation_start = None;
+        self
+    }
+
+    /// Milliseconds into the logo's animation, or `None` when it's still.
+    pub fn animation_ms(&self) -> Option<u128> {
+        self.animation_start
+            .map(|start| start.elapsed().as_millis().max(1))
     }
 
     /// Cluster time, estimated from the last refresh.

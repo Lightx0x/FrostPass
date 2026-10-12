@@ -33,6 +33,10 @@ struct Args {
     /// Wallet keypair file [default: ~/.config/solana/id.json]
     #[arg(short, long)]
     keypair: Option<PathBuf>,
+
+    /// Keep the logo still (no glow or shimmer)
+    #[arg(long)]
+    no_animation: bool,
 }
 
 fn rpc_url(url: &str) -> String {
@@ -64,5 +68,11 @@ fn main() -> Result<()> {
         _ => url.clone(),
     };
     let data_dir = store::data_dir(&cluster);
-    ui::run(RpcChain::new(&url), wallet, cluster, data_dir.as_deref())
+    ui::run(
+        RpcChain::new(&url),
+        wallet,
+        cluster,
+        data_dir.as_deref(),
+        !args.no_animation,
+    )
 }

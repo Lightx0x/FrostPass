@@ -672,7 +672,7 @@ fn the_app_walks_one_wallet_through_every_tab() {
         .created
         .unwrap();
 
-    let mut app = App::new(chain, wallet, "litesvm".into());
+    let mut app = App::new(chain, wallet, "litesvm".into()).without_animation();
     let mut terminal = Terminal::new(TestBackend::new(120, 42)).unwrap();
     let mut screen = |app: &mut App<SvmChain>| {
         while app.has_pending() || app.has_idle_work() {

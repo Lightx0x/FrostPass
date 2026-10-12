@@ -78,14 +78,8 @@ fn draw_header<C: Chain>(frame: &mut Frame, area: Rect, app: &App<C>) {
         || "no USDC account".to_string(),
         |a| format!("{} USDC", format::usdc(a)),
     );
-    let left = Line::from(vec![
-        Span::styled(
-            " FROSTPASS ",
-            Style::new()
-                .bg(theme::ACCENT)
-                .fg(theme::ON_ACCENT)
-                .add_modifier(Modifier::BOLD),
-        ),
+    let mut left = theme::logo(app.animation_ms());
+    left.extend([
         Span::styled(format!("  {}", app.cluster), theme::muted()),
         Span::styled("  wallet ", theme::muted()),
         Span::styled(format::short(&app.me()), theme::strong()),
@@ -431,7 +425,7 @@ fn draw_door<C: Chain>(frame: &mut Frame, area: Rect, app: &App<C>) {
             let (word, color) = if report.admits() {
                 (" ADMIT ", theme::OK)
             } else {
-                (" REFUSE ", theme::ACCENT)
+                (" REFUSE ", theme::DANGER)
             };
             lines.push(Line::from(vec![
                 Span::styled(
@@ -453,7 +447,7 @@ fn draw_door<C: Chain>(frame: &mut Frame, area: Rect, app: &App<C>) {
             for check in &report.checks {
                 let (mark, style, detail) = match &check.result {
                     Ok(detail) => ("✓", theme::ok(), detail.clone()),
-                    Err(detail) => ("✗", theme::accent(), detail.clone()),
+                    Err(detail) => ("✗", theme::danger(), detail.clone()),
                 };
                 lines.push(Line::from(vec![
                     Span::styled(format!("{mark} "), style.add_modifier(Modifier::BOLD)),
@@ -531,7 +525,7 @@ fn log_status(entry: &LogEntry) -> (&'static str, Style) {
         LogStatus::Finalized => ("✓", theme::ok()),
         LogStatus::Confirmed if entry.slot.is_some() => ("✓", theme::warn()),
         LogStatus::Confirmed => ("…", theme::warn()),
-        LogStatus::Failed => ("✗", theme::accent()),
+        LogStatus::Failed => ("✗", theme::danger()),
     }
 }
 
@@ -651,7 +645,7 @@ fn draw_log<C: Chain>(frame: &mut Frame, left: Rect, right: Rect, app: &App<C>) 
     };
     let mut lines = row("Status", status, status_style);
     if let Some(error) = &entry.error {
-        lines.extend(row("Error", error.clone(), theme::accent()));
+        lines.extend(row("Error", error.clone(), theme::danger()));
     }
     if let Some(signature) = &entry.signature {
         lines.extend(row("Signature", signature.clone(), theme::text()));
@@ -835,7 +829,7 @@ fn draw_status<C: Chain>(frame: &mut Frame, area: Rect, app: &App<C>) {
         StatusKind::Info => (" ", theme::muted()),
         StatusKind::Busy => ("…", theme::warn()),
         StatusKind::Ok => ("✓", theme::ok()),
-        StatusKind::Error => ("✗", theme::accent()),
+        StatusKind::Error => ("✗", theme::danger()),
     };
     frame.render_widget(
         Paragraph::new(Line::from(vec![
@@ -1003,7 +997,7 @@ fn draw_form(frame: &mut Frame, form: &Form) {
         lines.push(Line::raw(""));
         lines.push(Line::styled(
             error.clone(),
-            theme::accent().add_modifier(Modifier::BOLD),
+            theme::danger().add_modifier(Modifier::BOLD),
         ));
     }
     draw_modal(
@@ -1042,7 +1036,7 @@ fn draw_confirm(frame: &mut Frame, confirm: &super::app::Confirm) {
         lines.push(Line::raw(""));
         lines.push(Line::styled(
             warning.clone(),
-            theme::accent().add_modifier(Modifier::BOLD),
+            theme::danger().add_modifier(Modifier::BOLD),
         ));
     }
     let keys: &[(&str, &str)] = match &confirm.typed {
@@ -1078,7 +1072,7 @@ fn draw_pass(frame: &mut Frame, view: &super::app::PassView, now: i64) {
         } else {
             Line::styled(
                 "Expired: press r for a new pass",
-                theme::accent().add_modifier(Modifier::BOLD),
+                theme::danger().add_modifier(Modifier::BOLD),
             )
         },
         Line::raw(""),

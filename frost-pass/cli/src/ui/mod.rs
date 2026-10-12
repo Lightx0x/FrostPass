@@ -25,8 +25,9 @@ pub use view::draw;
 
 use crate::chain::Chain;
 
-/// How often the screen redraws without input, for countdowns (door passes, sales end).
-const TICK: Duration = Duration::from_millis(250);
+/// How often the screen redraws without input: countdowns (door passes, sales end) and the
+/// logo's glow. Only changed cells are sent to the terminal, so this stays cheap.
+const TICK: Duration = Duration::from_millis(80);
 
 /// Runs the app; `data_dir` keeps the transaction log and event order between runs.
 pub fn run(
@@ -34,8 +35,12 @@ pub fn run(
     wallet: Keypair,
     cluster: String,
     data_dir: Option<&Path>,
+    animate: bool,
 ) -> Result<()> {
     let mut app = App::new(chain, wallet, cluster);
+    if !animate {
+        app = app.without_animation();
+    }
     if let Some(dir) = data_dir {
         app = app.with_store(dir);
     }
